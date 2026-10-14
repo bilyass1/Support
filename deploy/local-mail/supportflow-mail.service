@@ -1,0 +1,21 @@
+[Unit]
+Description=SupportFlow local mailbox broker
+After=postfix.service dovecot.service
+
+[Service]
+Type=simple
+User=root
+Group=supportflow
+UMask=0077
+RuntimeDirectory=supportflow-mail
+RuntimeDirectoryMode=0750
+StateDirectory=supportflow-mail
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/libexec/supportflow-mail/broker.py
+Restart=on-failure
+RestartSec=10
+MemoryMax=128M
+CPUQuota=20%
+
+[Install]
+WantedBy=multi-user.target

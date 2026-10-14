@@ -1,3 +1,4 @@
+import { localMailAvailable, localMailRequest, provisionLocalMailbox } from './local-mail-provider';
 import { DomainError } from './domain';
 import type { MailDomain, Mailbox } from './mail-validation';
 
@@ -9,7 +10,9 @@ function configuration() {
     return key ? {origin: url.origin, key} : null;
   } catch { return null; }
 }
-export function mailProviderAvailable() { return configuration() !== null; }
+export function mailProviderAvailable(provider?: string) {
+  return provider === 'postfix' ? localMailAvailable() : provider === 'mailcow' ? configuration() !== null : configuration() !== null || localMailAvailable();
+}
 
 async function request(path: string, body?: unknown): Promise<unknown> {
   const config = configuration();
@@ -28,7 +31,8 @@ async function request(path: string, body?: unknown): Promise<unknown> {
   }
   return result;
 }
-export async function verifyMailDomain(domain: string) {
+export async function verifyMailDomain(domain: string, provider = 'mailcow') {
+  if (provider === 'postfix') { await localMailRequest({operation: 'verify_domain', domain}); return; }
   const result = await request('get/domain/' + encodeURIComponent(domain));
   const entry = Array.isArray(result) ? result.find(item => item?.domain_name === domain) : result;
   if (!entry || typeof entry !== 'object' || !('domain_name' in entry) || entry.domain_name !== domain ||
@@ -37,6 +41,7 @@ export async function verifyMailDomain(domain: string) {
   }
 }
 export async function provisionMailbox(domain: MailDomain, mailbox: Mailbox, password?: string) {
+  if (domain.provider === 'postfix') return provisionLocalMailbox(domain, mailbox, password);
   const address = mailbox.local_part + '@' + domain.domain;
   if (mailbox.operation === 'create') {
     const existing = await request('get/mailbox/' + encodeURIComponent(address));
@@ -58,3 +63,4 @@ export async function provisionMailbox(domain: MailDomain, mailbox: Mailbox, pas
     await request('edit/mailbox', {items: [address], attr});
   }
 }
+
