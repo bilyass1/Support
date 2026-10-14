@@ -1,4 +1,25 @@
 import { auth } from '@/lib/auth';
+import { pool } from '@/lib/db';
 import { toNextJsHandler } from 'better-auth/next-js';
-export const { GET, POST } = toNextJsHandler(auth);
-export const runtime = 'nodejs';
+const handlers=toNextJsHandler(auth);
+export const GET=handlers.GET;
+export const runtime='nodejs';
+export async function POST(request:Request){
+ const raw=await request.clone().text();if(raw.length>20000)return Response.json({message:'Requête trop volumineuse.'},{status:413});
+ const path=new URL(request.url).pathname;
+ if(path.endsWith('/two-factor/disable') || path.endsWith('/two-factor/send-otp') || path.endsWith('/two-factor/verify-otp')) return Response.json({message:'Authenticator obligatoire. Contactez l’admin pour une récupération vérifiée.'},{status:403});
+ if(path.endsWith('/two-factor/verify-totp') || path.endsWith('/two-factor/verify-backup-code')){
+  const body=await request.clone().json().catch(()=>null);
+  if(body?.trustDevice===true) return Response.json({message:'Un code est requis à chaque connexion.'},{status:403});
+ }
+ const response=await handlers.POST(request);
+ if(response.ok&&(path.endsWith('/two-factor/verify-totp')||path.endsWith('/two-factor/verify-backup-code'))){
+  const cookies=new Map((request.headers.get('cookie')??'').split(';').filter(Boolean).map(value=>{const i=value.indexOf('=');return [value.slice(0,i).trim(),value.slice(i+1)] as [string,string];}));
+  for(const value of response.headers.getSetCookie()){const entry=value.split(';')[0],i=entry.indexOf('=');cookies.set(entry.slice(0,i),entry.slice(i+1));}
+  const headers=new Headers(request.headers);headers.set('cookie',Array.from(cookies).map(([key,value])=>key+'='+value).join('; '));
+  const session=await auth.api.getSession({headers});
+  if(!session?.user.twoFactorEnabled)return Response.json({message:'Vérification incomplète.'},{status:403});
+  await pool.query('INSERT INTO session_assurance(session_id,user_id) VALUES($1,$2) ON CONFLICT(session_id) DO UPDATE SET verified_at=now()',[session.session.id,session.user.id]);
+ }
+ return response;
+}

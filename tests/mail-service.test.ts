@@ -25,7 +25,7 @@ const run = (actor: Actor, input: unknown) => mailAct(actor, mailActionSchema.pa
 const rows = async <T = Record<string, unknown>>(sql: string, args: unknown[] = []) => (await harness.db.query<T>(sql, args)).rows;
 beforeAll(async () => {
   harness.db = new PGlite();
-  for (const name of ['001_initial.sql', '002_email.sql', '003_local_mail.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
+  for (const name of ['001_initial.sql', '002_email.sql', '003_local_mail.sql','004_platform.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
 });
 afterAll(async () => {await harness.db.close();});
 beforeEach(async () => {
@@ -33,6 +33,8 @@ beforeEach(async () => {
   const orgs = await rows<{id: string}>("INSERT INTO organizations(name) VALUES ('Client A'),('Client B') RETURNING id");
   client = {id: 'client', name: 'Client', role: 'client', organization_id: orgs[0].id};
   other = {id: 'other', name: 'Other', role: 'client', organization_id: orgs[1].id};
+  await harness.db.exec("INSERT INTO plans(name,annual_tokens,price_minor,support_level) VALUES ('Legacy',100,0,'Standard'); INSERT INTO subscriptions(organization_id,plan_id,snapshot) SELECT o.id,(SELECT id FROM plans LIMIT 1),'{\"annual_tokens\":100}'::jsonb FROM organizations o;");
+  await harness.db.exec('INSERT INTO wallets(organization_id,balance) SELECT id,100 FROM organizations;');
   harness.available = true; harness.provision.mockReset(); harness.verify.mockReset();
 });
 async function domain(overrides: Record<string, unknown> = {}) {
@@ -163,6 +165,24 @@ describe('email organizations and provisioning', () => {
     await run(client, {type: 'mailbox_operation', mailbox_id: box.id, operation: 'reset_password', password: secret});
     const audits = await rows<{detail: unknown}>('SELECT detail FROM audit_events');
     expect(JSON.stringify(audits)).not.toContain(secret);
+  });
+  it('enforces pack limits across all domains of the same organization', async()=>{
+    await harness.db.query('UPDATE subscriptions SET snapshot=$2 WHERE organization_id=$1',[client.organization_id,JSON.stringify({annual_tokens:100,mail_max_mailboxes:1,mail_total_mb:1000,mail_per_box_mb:700,mail_create_tokens:0})]);
+    const first=await domain({domain:'first.example'}),second=await domain({domain:'second.example'});
+    await expect(create(first,'large',800)).rejects.toThrow('pack');
+    const box=await create(first,'one',600);
+    await expect(create(second,'two',100)).rejects.toThrow('pack');
+    await resolve(box.id,false);
+    expect((await create(second,'two',100)).status).toBe('pending');
+  });
+  it('reserves mail tokens, consumes only on confirmation, releases cancellation once',async()=>{
+    await harness.db.query('UPDATE subscriptions SET snapshot=$2 WHERE organization_id=$1',[client.organization_id,JSON.stringify({annual_tokens:100,mail_max_mailboxes:10,mail_total_mb:20000,mail_per_box_mb:2000,mail_create_tokens:5})]);
+    const d=await domain();const box=await create(d);
+    const balance=async()=> (await rows('SELECT balance,reserved FROM wallets WHERE organization_id=$1',[client.organization_id]))[0];
+    expect(await balance()).toEqual({balance:100,reserved:5});
+    await resolve(box.id,true);expect(await balance()).toEqual({balance:95,reserved:0});
+    await expect(resolve(box.id,true)).rejects.toThrow('Aucune');
+    const cancelled=await create(d,'cancel');await resolve(cancelled.id,false);expect(await balance()).toEqual({balance:95,reserved:0});
   });
   it('applies the additive email migration idempotently without removing original records', async () => {
     const d = await domain(); await create(d);

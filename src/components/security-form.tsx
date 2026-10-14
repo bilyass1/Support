@@ -1,0 +1,18 @@
+'use client';
+import { useState } from 'react';
+import QRCode from 'react-qr-code';
+import { authClient } from '@/lib/auth-client';
+import { Field } from './forms';
+export function SecurityForm({enroll=false}:{enroll?:boolean}){
+ const [uri,setUri]=useState(''),[codes,setCodes]=useState<string[]>([]),[saved,setSaved]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[backup,setBackup]=useState(false);
+ return <main className="login-page"><section className="login-card"><img className="brand-logo" src="/solumove-logo.webp" alt="Solumove Technologies"/><h1>{enroll?'Protégez votre compte':'Vérification de connexion'}</h1>
+ <p className="muted">{enroll?'Ajoutez Solumove à Google Authenticator ou une application compatible. Cette étape est obligatoire avant d’accéder aux données.':'Saisissez le code de votre authenticator. Aucun appareil n’est dispensé de vérification à la connexion.'}</p>
+ {enroll&&!uri?<form className="form" onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{const password=String(new FormData(e.currentTarget).get('password'));const result=await authClient.twoFactor.enable({password});if(result.error)throw Error(result.error.message);if(result.data&&'totpURI'in result.data){setUri(result.data.totpURI);setCodes(result.data.backupCodes);}}catch(e){setError(e instanceof Error?e.message:'Activation impossible.');}finally{setBusy(false);}}}>
+ <Field label="Votre mot de passe actuel"><input name="password" type="password" autoComplete="current-password" required/></Field><button disabled={busy} className="primary">Configurer l’authenticator</button></form>:null}
+ {uri?<><div className="qr-private"><QRCode value={uri} size={180}/></div><p className="small">Scannez ce QR code directement dans l’application. Ne partagez pas cette page.</p><details><summary>Clé manuelle</summary><code>{new URL(uri).searchParams.get('secret')}</code></details><h3>Codes de secours</h3><p className="small">Conservez-les en lieu sûr. Chaque code ne sert qu’une fois.</p><div className="backup-codes">{codes.map(c=><code key={c}>{c}</code>)}</div><label className="checkbox"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)}/>J’ai conservé mes codes de secours.</label></>:null}
+ {(!enroll||uri)?<form className="form" onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{const code=String(new FormData(e.currentTarget).get('code'));const result=backup?await authClient.twoFactor.verifyBackupCode({code,trustDevice:false}):await authClient.twoFactor.verifyTotp({code,trustDevice:false});if(result.error)throw Error(result.error.message);window.location.assign('/');}catch(e){setError(e instanceof Error?e.message:'Code refusé.');}finally{setBusy(false);}}}>
+ <Field label={backup?'Code de secours':'Code à six chiffres'}><input key={String(backup)} name="code" required autoComplete="one-time-code" inputMode={backup?'text':'numeric'} pattern={backup?undefined:'[0-9]{6}'} maxLength={backup?100:6}/></Field><button className="primary" disabled={busy||(enroll&&!saved)}>Vérifier et continuer</button></form>:null}
+ {error?<p className="error" role="alert">{error}</p>:null}
+ {!enroll?<button className="text-button" onClick={()=>setBackup(!backup)}>{backup?'Utiliser mon authenticator':'Utiliser un code de secours'}</button>:<button onClick={async()=>{await authClient.signOut();window.location.assign('/login');}}>Se déconnecter</button>}
+ <p className="small muted">Appareil perdu ? Contactez l’admin pour une vérification d’identité et une réinscription obligatoire.</p></section></main>;
+}

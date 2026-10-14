@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-const harness = vi.hoisted(() => ({session: vi.fn(), actor: vi.fn(), act: vi.fn(), workspace: vi.fn()}));
+const harness = vi.hoisted(() => ({session: vi.fn(), actor: vi.fn(), act: vi.fn(), workspace: vi.fn(), db: vi.fn()}));
+vi.mock('../src/lib/db',()=>({pool:{query:harness.db}}));
 vi.mock('../src/lib/auth', () => ({auth: {api: {getSession: harness.session}}}));
 vi.mock('../src/lib/service', () => ({getActor: harness.actor}));
 vi.mock('../src/lib/mail-service', () => ({mailAct: harness.act, mailWorkspace: harness.workspace}));
@@ -10,7 +11,8 @@ function post(body: unknown, origin = 'https://support.example') {
 }
 beforeEach(() => {
   vi.stubEnv('BETTER_AUTH_URL', 'https://support.example');
-  harness.session.mockReset().mockResolvedValue({user: {id: 'client', name: 'Client'}});
+  harness.session.mockReset().mockResolvedValue({user: {id: 'client', name: 'Client',twoFactorEnabled:true},session:{id:'session-1'}});
+  harness.db.mockReset().mockImplementation(async(sql:string)=>sql.includes('session_assurance')?{rows:[{}],rowCount:1}:{rows:[{count:1}],rowCount:1});
   harness.actor.mockReset().mockResolvedValue(actor);
   harness.act.mockReset().mockResolvedValue({message: 'Demande enregistrée.'});
   harness.workspace.mockReset().mockResolvedValue({domains: [], mailboxes: []});
@@ -22,6 +24,12 @@ describe('mail HTTP authentication and input boundary', () => {
     expect((await GET(new Request('https://support.example/api/mail'))).status).toBe(401);
     expect((await POST(post({}))).status).toBe(401);
     expect(harness.act).not.toHaveBeenCalled(); expect(harness.workspace).not.toHaveBeenCalled();
+  });
+  it('blocks sessions without MFA enrollment or verification',async()=>{
+    harness.session.mockResolvedValue({user:{id:'client',name:'Client',twoFactorEnabled:false},session:{id:'old'}});
+    expect((await GET(new Request('https://support.example/api/mail'))).status).toBe(428);
+    harness.session.mockResolvedValue({user:{id:'client',name:'Client',twoFactorEnabled:true},session:{id:'old'}});harness.db.mockResolvedValue({rows:[],rowCount:0});
+    expect((await GET(new Request('https://support.example/api/mail'))).status).toBe(428);expect(harness.workspace).not.toHaveBeenCalled();
   });
   it('rejects cross-origin writes before business operations', async () => {
     expect((await POST(post({}, 'https://attacker.example'))).status).toBe(403);
@@ -51,3 +59,4 @@ describe('mail HTTP authentication and input boundary', () => {
     expect(harness.workspace).toHaveBeenCalledWith(actor, 2);
   });
 });
+

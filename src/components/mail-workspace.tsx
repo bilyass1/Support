@@ -60,7 +60,7 @@ function OutlookSettings({domain, mailbox}: {domain: MailDomain; mailbox: Mailbo
       <tr><th>Envoi SMTP</th><td>{domain.smtp_host} · port {domain.smtp_port} · {domain.smtp_port === 465 ? 'SSL/TLS' : 'STARTTLS'}</td></tr>
       <tr><th>Authentification SMTP</th><td>Oui, avec la même adresse et le mot de passe de la boîte.</td></tr>
     </tbody></table></div>
-    <p className="small">Outlook classique : Fichier → Ajouter un compte → Options avancées → Configuration manuelle → IMAP. Le mot de passe est celui de la boîte mail, distinct de votre connexion SupportFlow.</p>
+    <p className="small">Outlook : 1. Ajouter un compte. 2. Saisir votre adresse complète. 3. Choisir IMAP en configuration manuelle. 4. Copier les serveurs et ports ci-dessus. 5. Saisir votre mot de passe de boîte et activer l’authentification SMTP. Le mot de passe est celui de la boîte mail, distinct de votre connexion SupportFlow.</p>
   </section>;
 }
 

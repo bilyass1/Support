@@ -6,7 +6,7 @@ const rule=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('category_cost'),category,tokens:amount}),
   z.object({kind:z.literal('max_open_tickets'),limit:z.number().int().min(1).max(1000)})
 ]);
-const plan={name:z.string().trim().min(2).max(80),annual_tokens:amount,price_minor:amount,currency:z.enum(['TND','EUR','USD']),support_level:z.string().trim().min(1).max(80),rules:z.array(rule).max(30)};
+const plan={name:z.string().trim().min(2).max(80),annual_tokens:amount,price_minor:amount,currency:z.enum(['TND','EUR','USD']),support_level:z.string().trim().min(1).max(80),rules:z.array(rule).max(30),mail_max_mailboxes:amount.default(0),mail_total_mb:z.number().int().min(0).max(100000000).default(0),mail_per_box_mb:z.number().int().min(0).max(100000000).default(0),mail_create_tokens:amount.default(0)};
 export const actionSchema=z.discriminatedUnion('type',[
   z.object({type:z.literal('create_organization'),name:z.string().trim().min(2).max(120),email:z.email()}),
   z.object({type:z.literal('create_application'),organization_id:id,name:z.string().trim().min(2).max(120),kind:z.enum(['web','mobile','software'])}),
@@ -20,3 +20,4 @@ export const actionSchema=z.discriminatedUnion('type',[
   z.object({type:z.literal('comment'),ticket_id:id,body:z.string().trim().min(1).max(5000)})
 ]);
 export type Action=z.infer<typeof actionSchema>;
+
