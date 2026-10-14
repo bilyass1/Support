@@ -35,6 +35,7 @@ function DomainEditor({domain, organizations, automatic, onSave, onCancel}: {
         <Field label="Traitement des opérations"><select name="provider" defaultValue={domain?.provider ?? 'manual'}>
           <option value="manual">Intervention de l’équipe sur le serveur mail</option>
           <option value="mailcow">Automatique via Mailcow API{automatic ? '' : ' — connecteur à configurer'}</option>
+        <option value="postfix">Automatique via Postfix/Dovecot local</option>
         </select></Field>
       </div>
       <details><summary>Paramètres Outlook du fournisseur</summary><div className="form-grid spaced">
@@ -77,7 +78,7 @@ function MailboxActions({domain, mailbox, admin, automatic, onAction}: {
     <div className="actions">
       <button onClick={() => setSettings(!settings)} aria-expanded={settings}>Paramètres Outlook</button>
       {domain.enabled && !busy && ['active', 'suspended'].includes(mailbox.status) ? <>
-        <button onClick={() => setOperation(mailbox.status === 'active' ? 'suspend' : 'resume')}>{mailbox.status === 'active' ? 'Suspendre' : 'Réactiver'}</button>
+        <button disabled={domain.provider === 'postfix'} onClick={() => setOperation(mailbox.status === 'active' ? 'suspend' : 'resume')}>{mailbox.status === 'active' ? 'Suspendre' : 'Réactiver'}</button>
         <button onClick={() => setOperation('reset_password')}>Changer le mot de passe</button>
       </> : null}
     </div>
@@ -85,11 +86,11 @@ function MailboxActions({domain, mailbox, admin, automatic, onAction}: {
     {operation && !busy ? <div className="mail-settings"><h3>{operationLabels[operation]}</h3>
       <ActionForm label={domain.provider === 'manual' ? 'Envoyer la demande à l’équipe' : 'Confirmer l’opération'} onSubmit={async form => {
         const ok = await onAction({type: 'mailbox_operation', mailbox_id: mailbox.id, operation,
-          ...(domain.provider === 'mailcow' && operation === 'reset_password' ? {password: form.get('password')} : {})});
+          ...(domain.provider !== 'manual' && operation === 'reset_password' ? {password: form.get('password')} : {})});
         if (ok) setOperation(null);
         return ok;
       }}>
-        {domain.provider === 'mailcow' && operation === 'reset_password' ? <Field label="Nouveau mot de passe de la boîte"><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128}/></Field> : null}
+        {domain.provider !== 'manual' && operation === 'reset_password' ? <Field label="Nouveau mot de passe de la boîte"><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128}/></Field> : null}
         <p className="small muted">{operation === 'suspend' ? 'La suspension bloque l’utilisation de cette boîte sans supprimer ses messages.' : domain.provider === 'manual' ? 'L’équipe effectuera cette opération chez le fournisseur, puis confirmera son résultat.' : 'La modification sera transmise au serveur mail.'}</p>
         <button type="button" onClick={() => setOperation(null)}>Annuler</button>
       </ActionForm>
@@ -104,7 +105,7 @@ function MailboxActions({domain, mailbox, admin, automatic, onAction}: {
           <p className="small muted">Pour une création annulée, le quota sera libéré. Cette confirmation ne crée pas de boîte sur le serveur.</p>
         </ActionForm>}
     </details> : null}
-    {!automatic && domain.provider === 'mailcow' ? <p className="small muted">Connecteur automatique indisponible ; contactez votre administrateur.</p> : null}
+    {!automatic && domain.provider !== 'manual' ? <p className="small muted">Connecteur automatique indisponible ; contactez votre administrateur.</p> : null}
   </>;
 }
 
@@ -159,23 +160,23 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
       <div className="mail-metrics"><p><strong>{domain.mailbox_count}</strong> boîtes / {domain.max_mailboxes ?? 'sans plafond de nombre'}</p>
         <p><strong>{space(domain.allocated_quota_mb)}</strong> réservés / {space(domain.total_quota_mb)}</p>
         <p>Maximum par boîte : <strong>{space(domain.mailbox_quota_mb)}</strong></p></div>
-      <p className="small muted">{domain.provider === 'manual' ? 'Les demandes sont traitées par l’équipe.' : data.automatic_available ? 'Création et gestion automatiques via le serveur mail.' : 'Le connecteur du serveur mail doit être configuré.'} Le stockage affiché correspond aux quotas réservés, pas au volume réel des messages.</p>
-      {canManage ? <button disabled={!domain.enabled || (domain.provider === 'mailcow' && !data.automatic_available)} onClick={() => setCreating(domain)}>{domain.provider === 'manual' ? 'Demander une boîte mail' : 'Créer une boîte mail'}</button> : null}
+      <p className="small muted">{domain.provider === 'manual' ? 'Les demandes sont traitées par l’équipe.' : data.automatic_available ? 'Création et gestion automatiques via le serveur mail.' : 'Le connecteur du serveur mail doit être configuré.'} Le stockage affiché correspond aux quotas réservés, pas au volume réel des messages. {domain.provider === 'postfix' ? 'Ce connecteur ne limite pas physiquement le stockage. Suspension automatique indisponible.' : ''}</p>
+      {canManage ? <button disabled={!domain.enabled || (domain.provider !== 'manual' && !data.automatic_available)} onClick={() => setCreating(domain)}>{domain.provider === 'manual' ? 'Demander une boîte mail' : 'Créer une boîte mail'}</button> : null}
     </section>)}
     {data && !data.domains.length ? <section className="panel empty"><h3>Aucun domaine associé</h3><p>{admin ? 'Ajoutez le domaine de votre choix et associez-le à un client.' : 'Votre administrateur doit vous attribuer un domaine pour activer ce service.'}</p></section> : null}
     {creating ? <section className="panel"><div className="section-title"><h2>Nouvelle adresse @{creating.domain}</h2><button onClick={() => setCreating(null)}>Fermer</button></div>
       <ActionForm label={creating.provider === 'manual' ? 'Envoyer la demande de création' : 'Créer la boîte sur le serveur'} onSubmit={async form => {
         const ok = await action({type: 'create_mailbox', domain_id: creating.id, local_part: form.get('local_part'),
           display_name: form.get('display_name'), quota_mb: Number(form.get('quota_mb')),
-          ...(creating.provider === 'mailcow' ? {password: form.get('password')} : {})});
+          ...(creating.provider !== 'manual' ? {password: form.get('password')} : {})});
         if (ok) setCreating(null);
         return ok;
       }}>
         <div className="form-grid"><Field label={'Adresse avant @' + creating.domain}><input name="local_part" required maxLength={64} pattern="[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*" placeholder="contact" autoCapitalize="none" autoCorrect="off"/></Field>
           <Field label="Nom affiché"><input name="display_name" required maxLength={120} placeholder="Équipe contact"/></Field>
           <Field label="Quota réservé (Mo)"><input name="quota_mb" type="number" required min={1} max={creating.mailbox_quota_mb} defaultValue={creating.mailbox_quota_mb}/></Field>
-          {creating.provider === 'mailcow' ? <Field label="Mot de passe de la boîte"><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128}/></Field> : null}
-        </div><p className="small muted">{creating.provider === 'manual' ? 'L’équipe configurera la boîte et vous indiquera comment définir son mot de passe.' : 'Le mot de passe est envoyé au fournisseur par connexion chiffrée et n’est pas conservé dans SupportFlow.'}</p>
+          {creating.provider !== 'manual' ? <Field label="Mot de passe de la boîte"><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128}/></Field> : null}
+        </div><p className="small muted">{creating.provider === 'manual' ? 'L’équipe configurera la boîte et vous indiquera comment définir son mot de passe.' : 'Le mot de passe est transmis au serveur mail et n’est pas conservé dans SupportFlow.'}</p>
       </ActionForm>
     </section> : null}
     {data ? <section className="panel"><div className="section-title"><h2>Boîtes mail ({data.total_mailboxes})</h2><span className="small muted">Page {page + 1}</span></div>
@@ -191,3 +192,4 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
     </section> : null}
   </div>;
 }
+
