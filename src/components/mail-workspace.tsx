@@ -172,7 +172,7 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
         if (ok) setCreating(null);
         return ok;
       }}>
-        <div className="form-grid"><Field label={'Adresse avant @' + creating.domain}><input name="local_part" required maxLength={64} pattern="[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*" placeholder="contact" autoCapitalize="none" autoCorrect="off"/></Field>
+        <div className="form-grid"><Field label={'Adresse avant @' + creating.domain}><input name="local_part" required maxLength={64} pattern="[a-zA-Z0-9]+(([.]|_|-)[a-zA-Z0-9]+)*" placeholder="contact" autoCapitalize="none" autoCorrect="off"/></Field>
           <Field label="Nom affiché"><input name="display_name" required maxLength={120} placeholder="Équipe contact"/></Field>
           <Field label="Quota réservé (Mo)"><input name="quota_mb" type="number" required min={1} max={creating.mailbox_quota_mb} defaultValue={creating.mailbox_quota_mb}/></Field>
           {creating.provider !== 'manual' ? <Field label="Mot de passe de la boîte"><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128}/></Field> : null}
