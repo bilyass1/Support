@@ -1,0 +1,47 @@
+name: Validate Solumove platform
+on:
+  pull_request:
+  push:
+    branches: [feature/advanced-support-platform]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: supportflow_ci
+          POSTGRES_PASSWORD: ci-testing-only-password
+          POSTGRES_DB: supportflow_ci
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U supportflow_ci -d supportflow_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - run: npm ci --include=optional
+      - run: npm run typecheck
+      - run: npm test
+      - run: python3 -m unittest discover -s deploy/local-mail -p 'test_*.py' -v
+      - name: Configure isolated CI database
+        run: |
+          printf '%s\n' 'DATABASE_URL=postgresql://supportflow_ci:ci-testing-only-password@127.0.0.1:5432/supportflow_ci' 'BETTER_AUTH_URL=http://127.0.0.1:3000' 'BETTER_AUTH_SECRET=ci-only-secret-at-least-thirty-two-characters-123' > .env.local
+      - run: npm run db:migrate
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-ui-checks
+          path: test-results/*.png
+          if-no-files-found: ignore

@@ -27,7 +27,7 @@ async function activeSubscription(c:PoolClient,org:string) {
   if(!result.rowCount) throw new DomainError('Une formule active est nécessaire.',409);
   return result.rows[0];
 }
-async function credits(c:PoolClient,actor:Actor,org:string,ticket:string|null,kind:string,balanceDelta:number,reservedDelta:number,note:string) {
+export async function credits(c:PoolClient,actor:Actor,org:string,ticket:string|null,kind:string,balanceDelta:number,reservedDelta:number,note:string) {
   const wallet=await c.query('SELECT balance,reserved FROM wallets WHERE organization_id=$1 FOR UPDATE',[org]);
   if(!wallet.rowCount) throw new DomainError('Portefeuille introuvable.',404);
   const next=creditChange(wallet.rows[0].balance,wallet.rows[0].reserved,balanceDelta,reservedDelta);
@@ -50,20 +50,26 @@ export async function act(actor:Actor,input:Action) {
       return {id};
     }
     if(input.type==='create_application') {
-      staff(actor);
+      admin(actor);
       const result=await c.query('INSERT INTO applications(organization_id,name,kind) VALUES ($1,$2,$3) RETURNING id',[input.organization_id,input.name,input.kind]);
       await audit(c,actor,input.type,result.rows[0].id,input);
       return result.rows[0];
     }
     if(input.type==='save_plan') {
       admin(actor);
-      const values=[input.name,input.annual_tokens,input.price_minor,input.currency,input.support_level,JSON.stringify(input.rules)];
+      if(input.mail_per_box_mb>input.mail_total_mb) throw new DomainError('Quota par boîte supérieur au stockage du pack.',400);
+      const values=[input.name,input.annual_tokens,input.price_minor,input.currency,input.support_level,JSON.stringify(input.rules),input.mail_max_mailboxes,input.mail_total_mb,input.mail_per_box_mb,input.mail_create_tokens];
       const result=input.id
-        ? await c.query('UPDATE plans SET name=$1,annual_tokens=$2,price_minor=$3,currency=$4,support_level=$5,rules=$6,revision=revision+1 WHERE id=$7 RETURNING *',[...values,input.id])
-        : await c.query('INSERT INTO plans(name,annual_tokens,price_minor,currency,support_level,rules) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',values);
+        ? await c.query('UPDATE plans SET name=$1,annual_tokens=$2,price_minor=$3,currency=$4,support_level=$5,rules=$6,mail_max_mailboxes=$7,mail_total_mb=$8,mail_per_box_mb=$9,mail_create_tokens=$10,revision=revision+1 WHERE id=$11 RETURNING *',[...values,input.id])
+        : await c.query('INSERT INTO plans(name,annual_tokens,price_minor,currency,support_level,rules,mail_max_mailboxes,mail_total_mb,mail_per_box_mb,mail_create_tokens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',values);
       if(!result.rowCount) throw new DomainError('Formule introuvable.',404);
       const plan=result.rows[0];
       if(input.apply_to_existing) {
+        // Mail creation uses the same organization lock: do not lower a live
+        // allocation underneath existing mailboxes or concurrent creations.
+        await c.query('SELECT o.id FROM organizations o JOIN subscriptions s ON s.organization_id=o.id WHERE s.plan_id=$1 ORDER BY o.id FOR UPDATE OF o',[plan.id]);
+        const exceeds=await c.query(`SELECT s.organization_id FROM subscriptions s JOIN email_domains d ON d.organization_id=s.organization_id JOIN email_mailboxes b ON b.domain_id=d.id AND b.status<>'cancelled' WHERE s.plan_id=$1 GROUP BY s.organization_id HAVING count(*)>$2 OR sum(b.quota_mb)>$3 OR max(b.quota_mb)>$4`,[plan.id,plan.mail_max_mailboxes,plan.mail_total_mb,plan.mail_per_box_mb]);
+        if(exceeds.rowCount) throw new DomainError('Ce pack est inférieur aux boîtes ou au stockage déjà alloués.',409);
         await c.query('UPDATE subscriptions SET snapshot=$2 WHERE plan_id=$1',[plan.id,JSON.stringify(plan)]);
       }
       await audit(c,actor,input.type,plan.id,{...input,revision:plan.revision});
@@ -77,6 +83,8 @@ export async function act(actor:Actor,input:Action) {
       const result=await c.query('SELECT * FROM plans WHERE id=$1',[input.plan_id]);
       if(!result.rowCount) throw new DomainError('Formule introuvable.',404);
       const plan=result.rows[0];
+      const allocated=await c.query(`SELECT count(*)::int AS count,coalesce(sum(b.quota_mb),0)::int AS quota,coalesce(max(b.quota_mb),0)::int AS per_box FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=$1 AND b.status<>'cancelled'`,[input.organization_id]);
+      if(allocated.rows[0].count>plan.mail_max_mailboxes || allocated.rows[0].quota>plan.mail_total_mb || allocated.rows[0].per_box>plan.mail_per_box_mb) throw new DomainError('Ce pack est inférieur aux boîtes ou au stockage déjà alloués.',409);
       const subscription=await c.query('SELECT * FROM subscriptions WHERE organization_id=$1',[input.organization_id]);
       if(subscription.rowCount) {
         await c.query('UPDATE subscriptions SET plan_id=$2,snapshot=$3 WHERE organization_id=$1',[input.organization_id,plan.id,JSON.stringify(plan)]);
@@ -150,7 +158,7 @@ export async function workspace(actor:Actor) {
   const org=actor.organization_id;
   const predicate=scoped?' WHERE o.id=$1':'';
   const values=scoped?[org]:[];
-  const organizationQuery=`SELECT o.*,w.balance,w.reserved,s.snapshot,s.ends_at FROM organizations o JOIN wallets w ON w.organization_id=o.id LEFT JOIN subscriptions s ON s.organization_id=o.id${predicate} ORDER BY o.name`;
+  const organizationQuery=`SELECT o.*,(SELECT coalesce(json_agg(d.domain),'[]'::json) FROM email_domains d WHERE d.organization_id=o.id) AS domains,w.balance,w.reserved,s.snapshot,s.ends_at FROM organizations o JOIN wallets w ON w.organization_id=o.id LEFT JOIN subscriptions s ON s.organization_id=o.id${predicate} ORDER BY o.name`;
   const filter=scoped?' WHERE organization_id=$1':'';
   const [organizations,applications,plans,tickets,ledger,notifications,comments]=await Promise.all([
     pool.query(organizationQuery,values),
@@ -163,3 +171,4 @@ export async function workspace(actor:Actor) {
   ]);
   return {actor,organizations:organizations.rows,applications:applications.rows,plans:plans.rows,tickets:tickets.rows,ledger:ledger.rows,notifications:notifications.rows,comments:comments.rows};
 }
+

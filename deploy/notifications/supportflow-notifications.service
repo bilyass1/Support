@@ -1,0 +1,15 @@
+[Unit]
+Description=Deliver Solumove notifications and password recovery emails
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=supportflow
+Group=supportflow
+WorkingDirectory=/opt/supportflow/current
+ExecStart=/opt/supportflow/node22/node_modules/node/bin/node --env-file=.env.local scripts/deliver-notifications.mjs
+MemoryMax=256M
+CPUQuota=25%
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

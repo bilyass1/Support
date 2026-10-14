@@ -34,6 +34,7 @@ export type MailDomain = {
 };
 export type Mailbox = {
   id: string; domain_id: string; local_part: string; display_name: string; quota_mb: number;
+  reserved_tokens?: number;
   status: 'pending' | 'active' | 'suspended' | 'cancelled';
   operation: 'create' | 'suspend' | 'resume' | 'reset_password' | null;
   operation_state: 'pending' | 'processing' | 'failed' | null;

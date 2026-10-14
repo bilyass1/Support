@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool, transaction } from './db';
 import { DomainError } from './domain';
-import type { Actor } from './service';
+import { credits, type Actor } from './service';
 import type { MailAction, MailDomain, Mailbox } from './mail-validation';
 import { mailProviderAvailable, provisionMailbox, verifyMailDomain } from './mail-provider';
 
@@ -26,7 +26,8 @@ function targetStatus(mailbox: Mailbox) {
   return mailbox.operation === 'suspend' ? 'suspended' : mailbox.operation === 'reset_password' ? mailbox.status : 'active';
 }
 async function complete(c: PoolClient, actor: Actor, domain: MailDomain, mailbox: Mailbox) {
-  await c.query(`UPDATE email_mailboxes SET status=$2,operation=NULL,operation_state=NULL,operation_started_at=NULL WHERE id=$1`,
+  if(mailbox.operation==='create' && (mailbox.reserved_tokens??0)>0) await credits(c,actor,domain.organization_id,null,'mail_create',-mailbox.reserved_tokens!,-mailbox.reserved_tokens!,'Création boîte '+mailbox.local_part+'@'+domain.domain);
+  await c.query(`UPDATE email_mailboxes SET status=$2,operation=NULL,operation_state=NULL,operation_started_at=NULL,reserved_tokens=0 WHERE id=$1`,
     [mailbox.id, targetStatus(mailbox)]);
   await audit(c, actor, 'completed', mailbox.id, {operation: mailbox.operation});
   await c.query('INSERT INTO notifications(organization_id,message) VALUES ($1,$2)',
@@ -111,8 +112,11 @@ async function perform(actor: Actor, input: MailAction) {
       }
       const domain = (await c.query('SELECT * FROM email_domains WHERE id=$1', [mailbox.domain_id])).rows[0] as MailDomain;
       if (input.completed) await complete(c, actor, domain, mailbox);
-      else await c.query(`UPDATE email_mailboxes SET status=$2,operation=NULL,operation_state=NULL,operation_started_at=NULL WHERE id=$1`,
+      else {
+        if(mailbox.operation==='create' && (mailbox.reserved_tokens??0)>0) await credits(c,actor,domain.organization_id,null,'mail_release',0,-mailbox.reserved_tokens!,'Création annulée après vérification');
+        await c.query(`UPDATE email_mailboxes SET status=$2,operation=NULL,operation_state=NULL,operation_started_at=NULL,reserved_tokens=0 WHERE id=$1`,
         [mailbox.id, mailbox.operation === 'create' ? 'cancelled' : mailbox.status]);
+      }
       await audit(c, actor, input.type, mailbox.id, {completed: input.completed, note: input.note, operation: mailbox.operation});
       return {message: 'Vérification du fournisseur enregistrée.'};
     });
@@ -147,13 +151,21 @@ async function perform(actor: Actor, input: MailAction) {
     }
     const state = domain.provider === 'manual' ? 'pending' : 'processing';
     if (input.type === 'create_mailbox') {
+      await c.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[domain.organization_id]);
+      const subscription=(await c.query('SELECT snapshot FROM subscriptions WHERE organization_id=$1 AND ends_at>now()',[domain.organization_id])).rows[0];
+      if(!subscription) throw new DomainError('Attribuez une formule active avant de créer une boîte.',409);
+      const pack=subscription.snapshot;
+      const total=(await c.query(`SELECT count(*)::int AS count,coalesce(sum(b.quota_mb),0)::int AS quota FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=$1 AND b.status<>'cancelled'`,[domain.organization_id])).rows[0];
+      if(pack.mail_max_mailboxes!==undefined && (total.count>=pack.mail_max_mailboxes || total.quota+input.quota_mb>pack.mail_total_mb || input.quota_mb>pack.mail_per_box_mb)) throw new DomainError('Limite du pack mail atteinte (nombre ou stockage).',409);
+      const tokenCost=Number(pack.mail_create_tokens??0);
+      if(tokenCost>0) await credits(c,actor,domain.organization_id,null,'mail_reserve',0,tokenCost,'Réservation pour création mail');
       const allocated = await usage(c, domain.id);
       if (domain.max_mailboxes !== null && allocated.count >= domain.max_mailboxes) throw new DomainError('Nombre maximal de boîtes atteint.', 409);
       if (input.quota_mb > domain.mailbox_quota_mb || allocated.quota + input.quota_mb > domain.total_quota_mb) {
         throw new DomainError('Quota de stockage disponible insuffisant ou quota par boîte dépassé.', 409);
       }
-      const result = await c.query(`INSERT INTO email_mailboxes(domain_id,local_part,display_name,quota_mb,operation,operation_state,operation_started_at)
-        VALUES ($1,$2,$3,$4,'create',$5,now()) RETURNING *`, [domain.id, input.local_part, input.display_name, input.quota_mb, state]);
+      const result = await c.query(`INSERT INTO email_mailboxes(domain_id,local_part,display_name,quota_mb,operation,operation_state,operation_started_at,reserved_tokens)
+        VALUES ($1,$2,$3,$4,'create',$5,now(),$6) RETURNING *`, [domain.id, input.local_part, input.display_name, input.quota_mb, state,tokenCost]);
       mailbox = result.rows[0];
     } else {
       if (mailbox!.operation) throw new DomainError('Une opération attend déjà un traitement pour cette boîte.', 409);
