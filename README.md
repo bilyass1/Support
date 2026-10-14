@@ -29,6 +29,7 @@ Le fichier `package-lock.json` fixe les versions installées. Node.js 22 ou sup�
 - Acceptation : réservation atomique des crédits. Clôture : consommation. Annulation par l’équipe : libération des crédits réservés. Le client peut annuler ses demandes avant acceptation et clôturer une livraison prête à tester.
 - Une estimation acceptée ne peut plus être modifiée. Une ancienne version de devis ne peut pas être acceptée. Les demandes et les acceptations exigent un abonnement actif.
 - Historique des mouvements, journal d’audit en base et notifications dans l’application.
+- Messagerie multi-domaines : l’admin saisit le domaine de son choix et l’attribue à un client. Nombre de boîtes configurable (sans plafond applicatif possible), quotas par boîte et par domaine, demandes manuelles ou provisionnement via une API Mailcow existante, suspension/réactivation, changement du mot de passe et paramètres Outlook. Les clients sont isolés par organisation.
 - Interface française responsive et mode clair/sombre. Manifest PWA, icônes et service worker initial ; aucune donnée client n’est mise en cache hors ligne.
 
 Les noms, quotas et tarifs de vos formules ne sont pas imposés. La base est vide au démarrage.
@@ -95,11 +96,45 @@ src/lib/domain.ts        Invariants du portefeuille et transitions
 src/lib/service.ts       Opérations métier et accès par client
 src/lib/validation.ts    Validation des actions et des règles
 db/001_initial.sql       Schéma métier
+db/002_email.sql         Domaines, boîtes mail et opérations de provisionnement
 scripts/migrate.mjs      Migrations Better Auth et application
 scripts/grant-admin.mjs  Attribution administrative d’un rôle
 tests/                   Tests métier et SQL
 public/                  Manifest et ressources PWA
 ```
+
+## Messagerie & Outlook
+
+### Mise à jour d’une installation existante
+
+Après récupération du code, exécuter `npm run db:migrate` avec le `.env.local` de cette installation. Le script applique désormais les migrations `001_initial.sql` puis `002_email.sql`, une seule fois chacune, dans une transaction protégée par un verrou. Dans un environnement qui fournit déjà `DATABASE_URL`, on peut lancer `node scripts/migrate.mjs` directement. Le push du code n’exécute pas les migrations de production.
+
+### Administration des domaines
+
+1. Créer ou sélectionner le client dans « Clients & applications ».
+2. Ouvrir « Messagerie & Outlook », puis « Ajouter un domaine ». L’admin saisit un nom de domaine réel, sans protocole ni chemin, et choisit le client propriétaire. Aucun domaine n’est codé en dur. Les noms internationalisés peuvent être saisis au format ASCII Punycode.
+3. Définir le stockage total et le quota maximal par boîte, en Mo. Laisser le nombre maximal vide pour ne pas imposer de plafond de nombre dans SupportFlow. Les quotas réservés et les limites du fournisseur continuent de s’appliquer. Les quotas sont réservés dès la demande, y compris pour les boîtes suspendues ou les opérations non confirmées. Ce compteur n’est pas une mesure du stockage réellement utilisé.
+4. Renseigner les hôtes IMAP/SMTP du fournisseur, si différents de `mail.<domaine>`. Réception : IMAP 993 SSL/TLS ; envoi : SMTP 587 STARTTLS ou 465 SSL/TLS. Les clients voient l’identifiant complet et les instructions Outlook pour chaque boîte.
+5. Préparer le domaine chez le fournisseur, le DNS (MX, SPF, DKIM, DMARC), le certificat TLS et les services de réception/envoi. Vérifier la réception et la délivrabilité. Puis cocher « Autoriser les demandes ». Ajouter le domaine dans SupportFlow ne l’achète pas, ne change pas ses DNS et n’installe pas de serveur mail.
+
+Le nom du domaine et son organisation ne peuvent pas être réaffectés. Les managers peuvent consulter les données de messagerie, mais seuls les admins configurent les domaines ; les admins et le client propriétaire peuvent demander des opérations sur les boîtes.
+
+### Deux modes de traitement
+
+- **Intervention de l’équipe** (par défaut) : le client demande une boîte, une suspension/réactivation ou une réinitialisation. La demande est enregistrée et son quota réservé. L’équipe réalise l’opération dans son serveur/panneau de messagerie, puis confirme ou annule la demande dans SupportFlow avec une note et une attestation de vérification. Une demande n’est jamais présentée comme une boîte active avant confirmation. Les mots de passe se définissent chez le fournisseur et ne sont pas saisis dans ce mode.
+- **Automatique via Mailcow API** : connecter une installation Mailcow opérationnelle avec `MAILCOW_API_URL=https://mail.votre-fournisseur.tn` (origine HTTPS uniquement, sans `/api/v1`) et `MAILCOW_API_KEY`, côté serveur. Sur Vercel, utiliser des variables serveur, jamais `NEXT_PUBLIC_*`. Configurer les accès API chez Mailcow et ses restrictions réseau pour le serveur d’application. Le domaine doit déjà exister et être actif chez Mailcow ; SupportFlow le vérifie lors de son activation. Les limites configurées ici doivent être compatibles avec celles du domaine Mailcow. Cette intégration ne suppose pas que Mailcow soit installé sur le VPS existant.
+
+En mode automatique, le client choisit le mot de passe de sa nouvelle boîte ou de sa réinitialisation. Il transite uniquement dans la requête HTTPS et l’appel serveur au fournisseur ; SupportFlow ne le conserve ni dans PostgreSQL, ni dans le journal d’audit, ni dans les notifications. Ne pas activer de journalisation des corps de requêtes sur ces routes. Les réponses brutes et journaux du fournisseur ne sont jamais renvoyés au client. Les redirections HTTP ne sont pas suivies avec la clé API.
+
+Une opération est persistée avant tout appel réseau. Un refus, timeout ou réponse incertaine conserve une opération « à vérifier » et sa réservation. Aucune tentative aveugle ne réinitialise ou ne récupère une boîte préexistante chez le fournisseur. L’admin vérifie l’état réel avant de confirmer, ou d’annuler si aucun changement demandé n’a été appliqué. Une opération restée « en cours » après une interruption peut être résolue après deux minutes. La suspension conserve les messages ; cette version ne propose pas leur suppression définitive.
+
+La liste des boîtes est paginée par 50. Les compteurs et contrôles de quota incluent l’ensemble des boîtes, pas uniquement la page affichée. Ce module est indépendant du portefeuille de crédits de développement.
+
+### Validation de la messagerie
+
+`npm run typecheck` et `npm test` vérifient notamment la saisie de domaines arbitraires, l’isolation des clients, les quotas, doublons, opérations manuelles et automatiques, l’absence de mots de passe dans les données conservées, les échecs fournisseur et les protections HTTP. Les tests d’intégration SQL utilisent PGlite ; les tests du connecteur simulent les réponses de l’API Mailcow officielle. Ils n’envoient aucun vrai e-mail et ne modifient aucun serveur externe. Un test avec une vraie instance Mailcow et un compte Outlook reste nécessaire lors de son raccordement.
+
+Références : [API officielle Mailcow](https://github.com/mailcow/mailcow-dockerized/blob/master/data/web/api/openapi.yaml), [ajouter un compte IMAP dans Outlook](https://support.microsoft.com/fr-fr/outlook/getstarted/add-an-email-account-to-outlook-for-windows).
 
 ## Suite prévue à partir des besoins exprimés
 

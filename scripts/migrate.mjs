@@ -10,11 +10,12 @@ try {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(758321)');
   await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())');
-  const name = '001_initial.sql';
-  const done = await client.query('SELECT name FROM schema_migrations WHERE name=$1',[name]);
-  if (!done.rowCount) {
-    await client.query(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
-    await client.query('INSERT INTO schema_migrations(name) VALUES ($1)',[name]);
+  for (const name of ['001_initial.sql','002_email.sql']) {
+    const done = await client.query('SELECT name FROM schema_migrations WHERE name=$1',[name]);
+    if (!done.rowCount) {
+      await client.query(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+      await client.query('INSERT INTO schema_migrations(name) VALUES ($1)',[name]);
+    }
   }
   await client.query('COMMIT');
   console.log('Application database ready.');
