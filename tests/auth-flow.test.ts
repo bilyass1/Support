@@ -7,9 +7,10 @@ import {createHmac} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 const harness=vi.hoisted(()=>({auth:null as unknown as {handler:(request:Request)=>Promise<Response>;api:{getSession:(input:{headers:Headers})=>Promise<unknown>}},db:null as unknown as PGlite}));
 const query=async(sql:string,args:unknown[]=[])=>{const r=await harness.db.query(sql,args);return {...r,rowCount:r.affectedRows??r.rows.length,command:sql.trim().split(/\s/)[0].toUpperCase()};};
-vi.mock('../src/lib/db',()=>({pool:{query:async(sql:string,args:unknown[]=[])=>{const r=await harness.db.query(sql,args);return {rows:r.rows,rowCount:r.rows.length||r.affectedRows||0};}}}));
+vi.mock('../src/lib/db',()=>({transaction:async(fn:(c:never)=>Promise<unknown>)=>harness.db.transaction(async db=>fn({query:async(sql:string,args:unknown[]=[])=>{const r=await db.query(sql,args);return {rows:r.rows,rowCount:r.rows.length||r.affectedRows||0};}} as never)),pool:{query:async(sql:string,args:unknown[]=[])=>{const r=await harness.db.query(sql,args);return {rows:r.rows,rowCount:r.rows.length||r.affectedRows||0};}}}));
 vi.mock('../src/lib/auth',()=>({auth:{handler:(request:Request)=>harness.auth.handler(request),api:{getSession:(input:{headers:Headers})=>harness.auth.api.getSession(input)}}}));
 import {POST} from '../src/app/api/auth/[...all]/route';
+import {createClient,reissueClient} from '../src/lib/client-accounts';
 import {authenticated} from '../src/lib/request';
 const cookies=new Map<string,string>();
 async function call(path:string,body:unknown){const response=await POST(new Request('https://support.test/api/auth/'+path,{method:'POST',headers:{Origin:'https://support.test','Content-Type':'application/json',Cookie:Array.from(cookies).map(([k,v])=>k+'='+v).join('; ')},body:JSON.stringify(body)}));for(const value of response.headers.getSetCookie()){const part=value.split(';')[0],i=part.indexOf('=');cookies.set(part.slice(0,i),part.slice(i+1));}return response;}
@@ -19,12 +20,26 @@ beforeAll(async()=>{
  const db={connect:async()=>({query,release:()=>{}}),end:async()=>{}};
  const options={database:db as never,baseURL:'https://support.test',secret:'test-secret-at-least-thirty-two-characters',emailAndPassword:{enabled:true,minPasswordLength:12},rateLimit:{enabled:false},plugins:[twoFactor({issuer:'Solumove Support'})]};
  await (await getMigrations(options)).runMigrations();
- for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+ for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
  harness.auth=betterAuth(options);
 });
 afterAll(async()=>{vi.unstubAllEnvs();await harness.db.close();});
 it('requires enrollment, validates TOTP, grants session assurance and challenges the next login',async()=>{
- const signup=await call('sign-up/email',{email:'client@cimeevents.com',password:'StrongPassword-12345',name:'Client'});expect(signup.status).toBe(200);
+ expect((await call('sign-up/email',{email:'blocked@example.com',password:'StrongPassword-12345',name:'Blocked'})).status).toBe(403);
+ await createClient({id:'admin',name:'Admin',role:'admin',organization_id:null},{name:'Cime Events',tax_id:'1234567/A/M/000',billing_address:'Tunis, Tunisia',contact_name:'Client',contact_email:'client@cimeevents.com',phone:'+216 20000000',primary_domain:'cimeevents.com',temporary_password:'TemporaryPassword-12345'});
+ const profile={name:'Cime Events',tax_id:'1234567/A/M/000',billing_address:'Tunis, Tunisia',contact_name:'Client',contact_email:'client@cimeevents.com',phone:'+216 20000000',primary_domain:'cimeevents.com',temporary_password:'TemporaryPassword-12345'};
+ await expect(createClient({id:'client',name:'Client',role:'client',organization_id:null},profile)).rejects.toThrow('admin');
+ await expect(createClient({id:'admin',name:'Admin',role:'admin',organization_id:null},profile)).rejects.toThrow('déjà');
+ expect((await harness.db.query('SELECT * FROM organizations')).rows).toHaveLength(1);
+ expect(JSON.stringify((await harness.db.query('SELECT detail FROM audit_events')).rows)).not.toContain('TemporaryPassword-12345');
+ expect((await harness.db.query<{password:string}>('SELECT password FROM "account"')).rows[0].password).not.toBe('TemporaryPassword-12345');
+ expect((await call('sign-in/email',{email:'client@cimeevents.com',password:'TemporaryPassword-12345'})).status).toBe(200);
+ const pendingRequest=new Request('https://support.test/api/mail',{headers:{Cookie:Array.from(cookies).map(([k,v])=>k+'='+v).join('; ')}});
+ await expect(authenticated(pendingRequest)).rejects.toThrow('temporaire');
+ expect((await call('two-factor/enable',{password:'TemporaryPassword-12345'})).status).toBe(428);
+ expect((await call('change-password',{currentPassword:'TemporaryPassword-12345',newPassword:'TemporaryPassword-12345'})).status).toBe(400);
+ expect((await call('change-password',{currentPassword:'TemporaryPassword-12345',newPassword:'StrongPassword-12345',revokeOtherSessions:true})).status).toBe(200);
+ expect((await harness.db.query('SELECT needs_password FROM client_onboarding')).rows[0]).toEqual({needs_password:false});
  const request=()=>new Request('https://support.test/api/mail',{headers:{Cookie:Array.from(cookies).map(([k,v])=>k+'='+v).join('; ')}});
  await expect(authenticated(request())).rejects.toThrow('authenticator');
  const enrollment=await call('two-factor/enable',{password:'StrongPassword-12345'});expect(enrollment.status).toBe(200);const data=await enrollment.json();
@@ -38,4 +53,9 @@ it('requires enrollment, validates TOTP, grants session assurance and challenges
  const signin=await call('sign-in/email',{email:'client@cimeevents.com',password:'StrongPassword-12345'});expect(signin.status).toBe(200);expect((await signin.json()).twoFactorRedirect).toBe(true);
  await expect(authenticated(request())).rejects.toThrow('Connectez-vous');
  const next=await call('two-factor/verify-totp',{code:code(secret),trustDevice:false});expect(next.status).toBe(200);expect((await authenticated(request())).id).toBeTruthy();
+
+ await reissueClient({id:'admin',name:'Admin',role:'admin',organization_id:null},{user_id:(await authenticated(request())).id,temporary_password:'Second-Temporary-123456',admin_password:'Admin-Password-123',reason:'Identity verified against the signed contract',identity_verified:true});
+ await expect(authenticated(request())).rejects.toThrow('Connectez-vous');
+ expect((await harness.db.query('SELECT needs_password FROM client_onboarding')).rows[0]).toEqual({needs_password:true});
+ expect(JSON.stringify((await harness.db.query('SELECT detail FROM audit_events')).rows)).not.toContain('Second-Temporary-123456');
 },30000);

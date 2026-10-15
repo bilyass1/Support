@@ -11,7 +11,7 @@ try {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(758321)');
   await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())');
-  for (const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql']) {
+  for (const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql']) {
     const done = await client.query('SELECT name FROM schema_migrations WHERE name=$1',[name]);
     if (!done.rowCount) {
       await client.query(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
