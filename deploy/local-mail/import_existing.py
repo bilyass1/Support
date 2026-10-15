@@ -97,7 +97,8 @@ def inspect_accounts(broker, domain, parts, db_rows):
         if account.pw_uid<1000 or account.pw_shell!='/sbin/nologin' or account.pw_dir!=str(home):
             raise Refused('Unexpected Linux identity: '+username)
         for path in [home,home/'Maildir',home/'Maildir/cur',home/'Maildir/new',home/'Maildir/tmp']:
-            info=path.lstat()
+            try: info=path.lstat()
+            except FileNotFoundError: raise Refused('Missing mailbox directory: '+str(path))
             if not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid:
                 raise Refused('Unsafe mailbox directory: '+str(path))
         target=username+'@localhost'
@@ -185,6 +186,9 @@ def main():
     if info['rows'] and any(r['local_part'] not in parts for r in info['rows']):
         raise Refused('Extra application mailboxes need separate review.')
     records=inspect_accounts(broker,args.domain,parts,info['rows'])
+    root_count=len(list(broker.STATE.glob('*.json')))+sum(r['state_missing'] for r in records)
+    if root_count+max(0,args.max_mailboxes-len(records))>broker.settings()['max_accounts']:
+        raise Refused('Root broker limit does not leave room for the remaining pack slots.')
     print('Client: '+info['organization']['name']+' / '+info['email'])
     print('Import: '+', '.join(r['local_part']+'@'+args.domain for r in records))
     print('Pack: '+str(args.max_mailboxes)+' mailboxes; '+str(args.total_mb)+' MB allocated; '+str(args.per_box_mb)+' MB per box.')
