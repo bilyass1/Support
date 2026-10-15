@@ -10,7 +10,7 @@ const query=async(sql:string,args:unknown[]=[])=>{const r=await harness.db.query
 vi.mock('../src/lib/db',()=>({transaction:async(fn:(c:never)=>Promise<unknown>)=>harness.db.transaction(async db=>fn({query:async(sql:string,args:unknown[]=[])=>{const r=await db.query(sql,args);return {rows:r.rows,rowCount:r.rows.length||r.affectedRows||0};}} as never)),pool:{query:async(sql:string,args:unknown[]=[])=>{const r=await harness.db.query(sql,args);return {rows:r.rows,rowCount:r.rows.length||r.affectedRows||0};}}}));
 vi.mock('../src/lib/auth',()=>({auth:{handler:(request:Request)=>harness.auth.handler(request),api:{getSession:(input:{headers:Headers})=>harness.auth.api.getSession(input)}}}));
 import {POST} from '../src/app/api/auth/[...all]/route';
-import {createClient} from '../src/lib/client-accounts';
+import {createClient,reissueClient} from '../src/lib/client-accounts';
 import {authenticated} from '../src/lib/request';
 const cookies=new Map<string,string>();
 async function call(path:string,body:unknown){const response=await POST(new Request('https://support.test/api/auth/'+path,{method:'POST',headers:{Origin:'https://support.test','Content-Type':'application/json',Cookie:Array.from(cookies).map(([k,v])=>k+'='+v).join('; ')},body:JSON.stringify(body)}));for(const value of response.headers.getSetCookie()){const part=value.split(';')[0],i=part.indexOf('=');cookies.set(part.slice(0,i),part.slice(i+1));}return response;}
@@ -53,4 +53,9 @@ it('requires enrollment, validates TOTP, grants session assurance and challenges
  const signin=await call('sign-in/email',{email:'client@cimeevents.com',password:'StrongPassword-12345'});expect(signin.status).toBe(200);expect((await signin.json()).twoFactorRedirect).toBe(true);
  await expect(authenticated(request())).rejects.toThrow('Connectez-vous');
  const next=await call('two-factor/verify-totp',{code:code(secret),trustDevice:false});expect(next.status).toBe(200);expect((await authenticated(request())).id).toBeTruthy();
+
+ await reissueClient({id:'admin',name:'Admin',role:'admin',organization_id:null},{user_id:(await authenticated(request())).id,temporary_password:'Second-Temporary-123456',admin_password:'Admin-Password-123',reason:'Identity verified against the signed contract',identity_verified:true});
+ await expect(authenticated(request())).rejects.toThrow('Connectez-vous');
+ expect((await harness.db.query('SELECT needs_password FROM client_onboarding')).rows[0]).toEqual({needs_password:true});
+ expect(JSON.stringify((await harness.db.query('SELECT detail FROM audit_events')).rows)).not.toContain('Second-Temporary-123456');
 },30000);

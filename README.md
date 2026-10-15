@@ -27,6 +27,6 @@ npm start
 
 Sur l’installation existante, le compte admin est conservé. Les nouveaux comptes clients se créent depuis son interface. L’attribution du rôle admin à un compte préexistant se fait exclusivement depuis la console via scripts/grant-admin.mjs. Conserver les codes de secours.
 
-59 tests applicatifs et 10 tests broker passent. Le build, les migrations PostgreSQL 16 et le parcours navigateur MFA / clair / sombre ont également réussi dans GitHub Actions sur une base CI isolée. La disponibilité en production dépend de la migration et des contrôles décrits dans le guide VPS.
+62 tests applicatifs et 10 tests broker passent. Le build, les migrations PostgreSQL 16 et le parcours navigateur MFA / clair / sombre ont également réussi dans GitHub Actions sur une base CI isolée. La disponibilité en production dépend de la migration et des contrôles décrits dans le guide VPS.
 
 Les quotas mail applicatifs mesurent le stockage alloué ; ils ne limitent pas encore physiquement le disque Dovecot. Les paiements sont confirmés manuellement. Les emails et push nécessitent leurs secrets serveur ; la PWA demande le consentement de chaque appareil.

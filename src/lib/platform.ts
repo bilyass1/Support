@@ -15,7 +15,7 @@ export const platformSchema=z.discriminatedUnion('type',[
  z.object({type:z.literal('issue_invoice'),organization_id:id,description:text,amount_minor:amount,currency:z.enum(['TND','EUR','USD']),due_at:z.iso.date()}),
  z.object({type:z.literal('invoice_status'),id,status:z.enum(['paid','void']),note:text}),
  z.object({type:z.literal('read_notification'),id}),
- z.object({type:z.literal('reset_mfa'),user_id:z.string().min(1).max(200),reason:z.string().trim().min(15).max(1000),identity_verified:z.literal(true),admin_password:z.string().min(12).max(128)})
+ z.object({type:z.literal('reset_mfa'),user_id:z.string().min(1).max(200),reason:z.string().trim().min(15).max(1000),identity_verified:z.literal(true),admin_password:z.string().min(1).max(128)})
 ]);
 export type PlatformAction=z.infer<typeof platformSchema>;
 function admin(actor:Actor){if(actor.role!=='admin')throw new DomainError('Action réservée à l’admin.',403);}
