@@ -27,11 +27,12 @@ export async function platformAct(actor:Actor,input:PlatformAction){
   const invoice=async(org:string,description:string,price:number,currency:string,due:string,purchase:string|null,paid:boolean)=>{
    const issuer=(await c.query("SELECT value FROM platform_settings WHERE key='issuer'")).rows[0]?.value;
    if(!issuer?.name||!issuer?.address||!issuer?.tax_id)throw new DomainError('Configurez les coordonnées de facturation avant émission ou approbation.',409);
-   const client=(await c.query('SELECT name FROM organizations WHERE id=$1',[org])).rows[0];
+   const client=(await c.query('SELECT name,tax_id,billing_address FROM organizations WHERE id=$1',[org])).rows[0];
    if(!client)throw new DomainError('Client introuvable.',404);
+   if(!client.tax_id||!client.billing_address)throw new DomainError('Complétez le matricule fiscal et l’adresse du client avant émission.',409);
    const n=(await c.query("SELECT nextval('invoice_number') AS n")).rows[0].n;
    const number='SF-'+new Date().getUTCFullYear()+'-'+String(n).padStart(6,'0');
-   const r=await c.query(`INSERT INTO invoices(number,organization_id,purchase_id,description,amount_minor,currency,status,issuer,client_name,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,[number,org,purchase,description,price,currency,paid?'paid':'issued',JSON.stringify(issuer),client.name,due,actor.id]);
+   const r=await c.query(`INSERT INTO invoices(number,organization_id,purchase_id,description,amount_minor,currency,status,issuer,client_name,due_at,created_by,client_tax_id,client_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,[number,org,purchase,description,price,currency,paid?'paid':'issued',JSON.stringify(issuer),client.name,due,actor.id,client.tax_id,client.billing_address]);
    await notify(org,'Nouvelle facture '+number+' disponible dans votre espace.'); return r.rows[0].id;
   };
   if(input.type==='save_offer'){
@@ -81,16 +82,18 @@ export async function platformAct(actor:Actor,input:PlatformAction){
 export async function platformWorkspace(actor:Actor){
  const scoped=actor.role==='client', args=scoped?[actor.organization_id]:[];
  const filter=scoped?' WHERE organization_id=$1':'';
- const [offers,purchases,invoices,cases,replies,usage,users,issuer,delivery]=await Promise.all([
+ const [offers,purchases,invoices,cases,replies,usage,users,issuer,delivery,clients,audit]=await Promise.all([
   pool.query('SELECT * FROM token_offers'+(scoped?' WHERE active=true':'')+' ORDER BY tokens'),
   pool.query('SELECT * FROM purchase_requests'+filter+' ORDER BY created_at DESC LIMIT 100',args),
-  pool.query('SELECT * FROM invoices'+filter+' ORDER BY issued_at DESC LIMIT 100',args),
+  pool.query('SELECT invoices.*,EXISTS(SELECT 1 FROM invoice_files f WHERE f.invoice_id=invoices.id) AS has_pdf FROM invoices'+filter+' ORDER BY issued_at DESC LIMIT 100',args),
   pool.query('SELECT * FROM support_cases'+filter+' ORDER BY created_at DESC LIMIT 100',args),
   pool.query(`SELECT r.*,u.name AS author_name FROM support_replies r JOIN support_cases c ON c.id=r.case_id LEFT JOIN "user" u ON u.id=r.author_id${scoped?' WHERE c.organization_id=$1':''} ORDER BY r.created_at DESC LIMIT 500`,args),
   pool.query(`SELECT organization_id,created_at::date::text AS day,sum(greatest(-balance_delta,0))::int AS consumed FROM credit_ledger WHERE created_at>=now()-interval '90 days'${scoped?' AND organization_id=$1':''} GROUP BY organization_id,created_at::date ORDER BY day`,args),
-  actor.role==='admin'?pool.query('SELECT u.id,u.name,u.email,u."twoFactorEnabled",m.organization_id FROM "user" u JOIN memberships m ON m.user_id=u.id WHERE NOT EXISTS(SELECT 1 FROM app_roles a WHERE a.user_id=u.id) ORDER BY u.name'):Promise.resolve({rows:[]}),
+  actor.role==='admin'?pool.query('SELECT u.id,u.name,u.email,u."twoFactorEnabled",m.organization_id,coalesce(co.needs_password,false) AS needs_password FROM "user" u JOIN memberships m ON m.user_id=u.id LEFT JOIN client_onboarding co ON co.user_id=u.id WHERE NOT EXISTS(SELECT 1 FROM app_roles a WHERE a.user_id=u.id) ORDER BY u.name'):Promise.resolve({rows:[]}),
   actor.role==='admin'?pool.query("SELECT value FROM platform_settings WHERE key='issuer'"):Promise.resolve({rows:[]}),
-  actor.role==='admin'?pool.query("SELECT count(*) FILTER(WHERE attempts<5)::int AS pending,count(*) FILTER(WHERE attempts>=5)::int AS failed FROM (SELECT attempts FROM notification_outbox WHERE delivered_at IS NULL UNION ALL SELECT attempts FROM auth_email_jobs WHERE delivered_at IS NULL AND expires_at>now()) jobs"):Promise.resolve({rows:[]})
+  actor.role==='admin'?pool.query("SELECT count(*) FILTER(WHERE attempts<5)::int AS pending,count(*) FILTER(WHERE attempts>=5)::int AS failed FROM (SELECT attempts FROM notification_outbox WHERE delivered_at IS NULL UNION ALL SELECT attempts FROM auth_email_jobs WHERE delivered_at IS NULL AND expires_at>now()) jobs"):Promise.resolve({rows:[]}),
+  actor.role==='admin'?pool.query(`SELECT o.id,(SELECT count(*)::int FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=o.id AND b.status<>'cancelled') AS mailboxes,(SELECT coalesce(sum(b.quota_mb),0)::int FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=o.id AND b.status<>'cancelled') AS mail_mb FROM organizations o`):Promise.resolve({rows:[]}),
+  actor.role==='admin'?pool.query('SELECT a.id,a.action,a.entity_id,a.created_at,u.name AS actor_name FROM audit_events a LEFT JOIN "user" u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT 50'):Promise.resolve({rows:[]})
  ]);
- return {offers:offers.rows,purchases:purchases.rows,invoices:invoices.rows,cases:cases.rows,replies:replies.rows,usage:usage.rows,users:users.rows,issuer:issuer.rows[0]?.value??null,delivery:delivery.rows[0]??null};
+ return {offers:offers.rows,purchases:purchases.rows,invoices:invoices.rows,cases:cases.rows,replies:replies.rows,usage:usage.rows,users:users.rows,issuer:issuer.rows[0]?.value??null,delivery:delivery.rows[0]??null,clients:clients.rows,audit:audit.rows};
 }

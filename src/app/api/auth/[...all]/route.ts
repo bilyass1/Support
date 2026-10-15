@@ -1,3 +1,4 @@
+import { needsPassword } from '@/lib/client-accounts';
 import { auth } from '@/lib/auth';
 import { pool } from '@/lib/db';
 import { toNextJsHandler } from 'better-auth/next-js';
@@ -7,6 +8,13 @@ export const runtime='nodejs';
 export async function POST(request:Request){
  const raw=await request.clone().text();if(raw.length>20000)return Response.json({message:'Requête trop volumineuse.'},{status:413});
  const path=new URL(request.url).pathname;
+ if(path.endsWith('/sign-up/email'))return Response.json({message:'Les comptes clients sont créés par votre administrateur.'},{status:403});
+ const sessionBefore=await auth.api.getSession({headers:request.headers});
+ if(sessionBefore&&await needsPassword(sessionBefore.user.id)){
+  const allowed=['/change-password','/sign-out','/sign-in/email','/request-password-reset','/reset-password'];
+  if(!allowed.some(p=>path.endsWith(p)))return Response.json({message:'Remplacez votre mot de passe temporaire avant de continuer.'},{status:428});
+  if(path.endsWith('/change-password')){const body=await request.clone().json().catch(()=>null);if(!body||body.currentPassword===body.newPassword)return Response.json({message:'Choisissez un nouveau mot de passe différent.'},{status:400});}
+ }
  if(path.endsWith('/two-factor/disable') || path.endsWith('/two-factor/send-otp') || path.endsWith('/two-factor/verify-otp')) return Response.json({message:'Authenticator obligatoire. Contactez l’admin pour une récupération vérifiée.'},{status:403});
  if(path.endsWith('/two-factor/verify-totp') || path.endsWith('/two-factor/verify-backup-code')){
   const body=await request.clone().json().catch(()=>null);

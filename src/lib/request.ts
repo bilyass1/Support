@@ -1,3 +1,4 @@
+import { needsPassword } from '@/lib/client-accounts';
 import { auth } from './auth';
 import { getActor } from './service';
 import { DomainError } from './domain';
@@ -5,6 +6,7 @@ import { pool } from './db';
 export async function authenticated(request:Request) {
   const session=await auth.api.getSession({headers:request.headers});
   if(!session) throw new DomainError('Connectez-vous pour continuer.',401);
+  if(await needsPassword(session.user.id)) throw new DomainError('Remplacez votre mot de passe temporaire.',428);
   if(!session.user.twoFactorEnabled) throw new DomainError('Activez votre authenticator pour accéder à votre espace.',428);
   const assurance=await pool.query("SELECT 1 FROM session_assurance WHERE session_id=$1 AND user_id=$2 AND verified_at>now()-interval '1 day'",[session.session.id,session.user.id]);
   if(!assurance.rowCount)throw new DomainError('Vérifiez votre authenticator pour cette session.',428);

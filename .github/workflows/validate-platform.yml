@@ -2,7 +2,7 @@ name: Validate Solumove platform
 on:
   pull_request:
   push:
-    branches: [feature/advanced-support-platform]
+    branches: [feature/advanced-support-platform, feature/admin-client-onboarding]
 permissions:
   contents: read
 jobs:
@@ -38,6 +38,8 @@ jobs:
       - run: npm run db:migrate
       - run: npm run build
       - run: npx playwright install --with-deps chromium
+      - name: Seed isolated browser fixture
+        run: SUPPORT_CI_SEED=yes node --env-file=.env.local scripts/seed-ci.mjs
       - run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: always()

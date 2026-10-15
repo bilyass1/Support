@@ -9,7 +9,7 @@ export async function getActor(id:string,name:string):Promise<Actor> {
     pool.query('SELECT role FROM app_roles WHERE user_id=$1',[id]),
     pool.query('SELECT organization_id FROM memberships WHERE user_id=$1',[id])
   ]);
-  return {id,name,role:role.rows[0]?.role??'client',organization_id:member.rows[0]?.organization_id??null};
+  return {id,name,role:role.rows[0]?.role==='admin'?'admin':'client',organization_id:member.rows[0]?.organization_id??null};
 }
 function staff(actor:Actor) { if(actor.role==='client') throw new DomainError('Accès réservé à l’équipe.',403); }
 function admin(actor:Actor) { if(actor.role!=='admin') throw new DomainError('Accès réservé à l’admin.',403); }
@@ -40,6 +40,7 @@ export async function act(actor:Actor,input:Action) {
       admin(actor);
       const user=await c.query('SELECT id FROM "user" WHERE lower(email)=lower($1)',[input.email]);
       if(!user.rowCount) throw new DomainError('Le client doit d’abord créer son compte.',409);
+      if((await c.query('SELECT user_id FROM app_roles WHERE user_id=$1',[user.rows[0].id])).rowCount)throw new DomainError('Un compte d’équipe ne peut pas devenir le compte d’un client.',409);
       const member=await c.query('SELECT user_id FROM memberships WHERE user_id=$1',[user.rows[0].id]);
       if(member.rowCount) throw new DomainError('Ce compte est déjà associé à un client.',409);
       const org=await c.query('INSERT INTO organizations(name) VALUES ($1) RETURNING id',[input.name]);
