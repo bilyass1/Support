@@ -93,6 +93,23 @@ def entries(path):
             for line in path.read_text().splitlines()
             if line.strip() and not line.lstrip().startswith('#') and len(line.split()) >= 2}
 
+def reviewed_layout(account, username, home, target):
+    # Imported accounts may retain their pre-existing home and local hostname
+    # alias. Only a root-reviewed state record can authorize that layout.
+    if account.pw_uid < 1000 or account.pw_shell != '/sbin/nologin' or account.pw_dir != str(home) or home.parent != HOME_ROOT:
+        raise Rejected('unsafe imported account')
+    for directory in (home, home/'Maildir', home/'Maildir/cur', home/'Maildir/new', home/'Maildir/tmp'):
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != account.pw_uid:
+            raise Rejected('unsafe imported home')
+    hostname = command(['/usr/sbin/postconf', '-h', 'myhostname'])
+    destinations = re.split(r'[\s,]+', command(['/usr/sbin/postconf', '-h', 'mydestination']))
+    if target == username+'@localhost':
+        if 'localhost' not in destinations:
+            raise Rejected('localhost is not local delivery')
+    elif target != username+'@'+hostname or not DOMAIN.fullmatch(hostname) or not ({hostname, '$myhostname'} & set(destinations)):
+        raise Rejected('nonlocal imported alias')
+
 def atomic_json(path, value):
     fd, name = tempfile.mkstemp(dir=STATE, prefix='.state-')
     try:
@@ -146,9 +163,18 @@ def provision(body):
         secure_file(state_path)
         record = json.loads(state_path.read_text())
         account = pwd.getpwnam(username)
-        if record != {'domain': domain, 'local_part': local, 'username': username, 'uid': account.pw_uid, 'phase': 'active'}:
+        expected = {'domain': domain, 'local_part': local, 'username': username, 'uid': account.pw_uid, 'phase': 'active'}
+        if 'home' in record or 'alias_target' in record:
+            if not isinstance(record.get('home'), str) or not isinstance(record.get('alias_target'), str):
+                raise Rejected('invalid reviewed layout')
+            home, target = Path(record['home']), record['alias_target']
+            reviewed_layout(account, username, home, target)
+            expected.update({'home': str(home), 'alias_target': target})
+        else:
+            target = username+'@localhost'
+        if record != expected:
             raise Rejected('unmanaged mailbox')
-        if account.pw_shell != '/sbin/nologin' or account.pw_dir != str(home) or entries(ALIAS).get(address) != username + '@localhost':
+        if account.pw_shell != '/sbin/nologin' or account.pw_dir != str(home) or entries(ALIAS).get(address) != target:
             raise Rejected('mailbox identity changed')
         command(['/usr/sbin/chpasswd'], username + ':' + password + '\n')
         return

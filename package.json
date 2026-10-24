@@ -11,7 +11,8 @@
     "db:migrate": "node --env-file=.env.local scripts/migrate.mjs",
     "admin:grant": "node --env-file=.env.local scripts/grant-admin.mjs",
     "test:e2e": "playwright test",
-    "notifications:deliver": "node --env-file=.env.local scripts/deliver-notifications.mjs"
+    "notifications:deliver": "node --env-file=.env.local scripts/deliver-notifications.mjs",
+    "notifications:check": "node --env-file=.env.local scripts/check-notifications.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -19,7 +20,7 @@
   "dependencies": {
     "better-auth": "1.7.7",
     "lucide-react": "1.56.0",
-    "next": "16.4.0",
+    "next": "16.4.3",
     "nodemailer": "^10.1.1",
     "pg": "8.23.1",
     "react": "19.3.0",

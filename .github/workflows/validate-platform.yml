@@ -2,7 +2,7 @@ name: Validate Solumove platform
 on:
   pull_request:
   push:
-    branches: [feature/advanced-support-platform, feature/admin-client-onboarding]
+    branches: [feature/advanced-support-platform, feature/admin-client-onboarding, fix/client-notifications]
 permissions:
   contents: read
 jobs:

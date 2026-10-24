@@ -65,4 +65,23 @@ class ImportTests(unittest.TestCase):
   with patch.object(Path,'lstat',lstat):
    with self.assertRaises(importer.Refused):self.inspect()
 
+ def test_imf_existing_home_and_alias_require_explicit_root_layout_review(self):
+  domain='imf-immobiliere.tn';self.alias={'contact@'+domain:'contact-'+domain+'@mail.solumove.net','info@'+domain:'info-'+domain+'@mail.solumove.net'}
+  from unittest.mock import Mock
+  self.broker.reviewed_layout=Mock()
+  def account(name):return types.SimpleNamespace(pw_uid=5022 if name.startswith('contact-') else 5023,pw_shell='/sbin/nologin',pw_dir=str(self.home/('imf_contact' if name.startswith('contact-') else 'imf_info')))
+  original=Path.lstat
+  def lstat(path):
+   if str(path).startswith(str(self.home)):return types.SimpleNamespace(st_mode=stat.S_IFDIR|0o700,st_uid=5022 if 'imf_contact' in str(path) else 5023)
+   return original(path)
+  with patch.object(importer.pwd,'getpwnam',side_effect=account),patch.object(Path,'lstat',lstat):
+   with self.assertRaises(importer.Refused):importer.inspect_accounts(self.broker,domain,['contact','info'],[])
+   records=importer.inspect_accounts(self.broker,domain,['contact','info'],[],True)
+  self.assertEqual(records[0]['record']['home'],str(self.home/'imf_contact'))
+  self.assertEqual(records[1]['record']['home'],str(self.home/'imf_info'))
+  self.assertEqual(records[0]['record']['alias_target'],'contact-imf-immobiliere.tn@mail.solumove.net')
+  self.assertTrue(all(not row['alias_missing'] for row in records))
+  self.assertEqual(self.broker.reviewed_layout.call_count,2)
+  self.assertEqual(list(self.state.glob('*.json')),[])
+
 if __name__=='__main__':unittest.main()

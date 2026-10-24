@@ -122,5 +122,45 @@ class BrokerTests(unittest.TestCase):
             with self.assertRaises(broker.Rejected):
                 broker.provision({**self.body, 'operation': operation})
 
+    def test_root_imported_imf_layout_can_reset_without_moving_messages_or_changing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);home=root/'home';home.mkdir();legacy=home/'imf_contact'
+            for folder in (legacy,legacy/'Maildir',legacy/'Maildir/cur',legacy/'Maildir/new',legacy/'Maildir/tmp'):folder.mkdir()
+            message=legacy/'Maildir/cur/existing-message';message.write_text('keep existing mail')
+            body={**self.body,'domain':'imf-immobiliere.tn','local_part':'contact','operation':'reset_password'}
+            name='contact-imf-immobiliere.tn';account=SimpleNamespace(pw_uid=5022,pw_shell='/sbin/nologin',pw_dir=str(legacy))
+            record={'domain':body['domain'],'local_part':'contact','username':name,'uid':5022,'phase':'active','home':str(legacy),'alias_target':name+'@mail.solumove.net'}
+            state=root/(body['mailbox_id']+'.json');state.write_text(json.dumps(record))
+            original=Path.lstat
+            def lstat(path):
+                info=original(path)
+                return SimpleNamespace(st_mode=info.st_mode,st_uid=5022) if path.is_relative_to(home) else info
+            def command(args,data=None):
+                if args[-1]=='myhostname':return 'mail.solumove.net'
+                if args[-1]=='mydestination':return '$myhostname, localhost.$mydomain, localhost'
+                return ''
+            with patch.object(broker,'STATE',root),patch.object(broker,'HOME_ROOT',home),patch.object(broker,'settings',return_value={'domains':['imf-immobiliere.tn'],'max_accounts':20}),patch.object(broker,'verify_domain'),patch.object(broker,'secure_file'),patch.object(broker,'entries',return_value={'contact@imf-immobiliere.tn':record['alias_target']}),patch.object(broker.pwd,'getpwnam',return_value=account),patch.object(Path,'lstat',lstat),patch.object(broker,'command',side_effect=command) as calls:
+                broker.provision(body)
+                calls.assert_any_call(['/usr/sbin/chpasswd'],name+':'+body['password']+'\n')
+                self.assertEqual(json.loads(state.read_text()),record)
+                self.assertEqual(message.read_text(),'keep existing mail')
+                # Even a reviewed record cannot reset a replacement Unix identity.
+                account.pw_uid=5999;calls.reset_mock()
+                with self.assertRaises(broker.Rejected):broker.provision(body)
+                self.assertFalse(any(call.args[0][0]=='/usr/sbin/chpasswd' for call in calls.call_args_list))
+
+    def test_reviewed_layout_rejects_nonlocal_aliases_and_home_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home=Path(directory);account=SimpleNamespace(pw_uid=5022,pw_shell='/sbin/nologin',pw_dir=str(home/'legacy'))
+            for path in (home/'legacy',home/'legacy/Maildir',home/'legacy/Maildir/cur',home/'legacy/Maildir/new',home/'legacy/Maildir/tmp'):path.mkdir()
+            original=Path.lstat
+            def lstat(path):
+                info=original(path);return SimpleNamespace(st_mode=info.st_mode,st_uid=5022)
+            with patch.object(broker,'HOME_ROOT',home),patch.object(Path,'lstat',lstat),patch.object(broker,'command',side_effect=['mail.solumove.net','$myhostname, localhost']):
+                with self.assertRaises(broker.Rejected):broker.reviewed_layout(account,'contact-imf-immobiliere.tn',home/'legacy','root@localhost')
+            (home/'unsafe').symlink_to(home/'legacy',target_is_directory=True);account.pw_dir=str(home/'unsafe')
+            with patch.object(broker,'HOME_ROOT',home),patch.object(Path,'lstat',lstat):
+                with self.assertRaises(broker.Rejected):broker.reviewed_layout(account,'contact-imf-immobiliere.tn',home/'unsafe','contact-imf-immobiliere.tn@localhost')
+
 if __name__ == '__main__':
     unittest.main()

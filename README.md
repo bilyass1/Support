@@ -6,6 +6,8 @@ Cette version ajoute les packs mail partagés par client, la réservation et con
 
 Le guide de configuration, de migration, de sauvegarde et de retour arrière est dans [deploy/advanced/README.md](deploy/advanced/README.md). Le broker Postfix/Dovecot est décrit dans [deploy/local-mail/README.md](deploy/local-mail/README.md).
 
+Correctifs : [activation des notifications et expéditeur de récupération](deploy/notifications/UPDATE.md), [association des deux boîtes IMF existantes](deploy/local-mail/IMPORT-IMF.md). La récupération du compte utilise désormais administration@solumove.net.
+
 ## Comptes clients et factures
 
 L’admin crée désormais le compte client avec matricule fiscal et mot de passe temporaire. Le client doit choisir son mot de passe personnel puis activer Authenticator avant tout accès. L’inscription publique est fermée. Le centre de pilotage admin regroupe comptes, packs, achats, factures, support et audit ; les PDFs sont privés et accessibles uniquement au client concerné et à l’admin.

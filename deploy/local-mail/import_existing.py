@@ -71,7 +71,7 @@ def validated_args(args):
         raise Refused('Invalid pack limits.')
     return parts
 
-def inspect_accounts(broker, domain, parts, db_rows):
+def inspect_accounts(broker, domain, parts, db_rows, allow_existing_layout=False):
     records = []
     known = {}
     directory = broker.STATE.lstat()
@@ -93,16 +93,21 @@ def inspect_accounts(broker, domain, parts, db_rows):
         username=local+'-'+domain
         try: account=pwd.getpwnam(username)
         except KeyError: raise Refused('Missing Linux account: '+username)
-        home=broker.HOME_ROOT/username
+        home=Path(account.pw_dir) if allow_existing_layout else broker.HOME_ROOT/username
         if account.pw_uid<1000 or account.pw_shell!='/sbin/nologin' or account.pw_dir!=str(home):
             raise Refused('Unexpected Linux identity: '+username)
+        if home.parent != broker.HOME_ROOT:
+            raise Refused('Home outside the mail home directory: '+username)
         for path in [home,home/'Maildir',home/'Maildir/cur',home/'Maildir/new',home/'Maildir/tmp']:
             try: info=path.lstat()
             except FileNotFoundError: raise Refused('Missing mailbox directory: '+str(path))
             if not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid:
                 raise Refused('Unsafe mailbox directory: '+str(path))
-        target=username+'@localhost'
         address=local+'@'+domain
+        target=aliases.get(address,username+'@localhost') if allow_existing_layout else username+'@localhost'
+        if allow_existing_layout:
+            try: broker.reviewed_layout(account,username,home,target)
+            except Exception: raise Refused('Unsafe existing layout: '+address) from None
         # A missing alias can be added; an existing conflicting route is never replaced.
         if address in aliases and aliases[address]!=target:
             raise Refused('Conflicting alias: '+address)
@@ -110,6 +115,8 @@ def inspect_accounts(broker, domain, parts, db_rows):
         if compiled!=(aliases.get(address) or ''):
             raise Refused('Source and compiled alias maps disagree: '+address)
         expected={'domain':domain,'local_part':local,'username':username,'uid':account.pw_uid,'phase':'active'}
+        if home!=broker.HOME_ROOT/username or target!=username+'@localhost':
+            expected.update({'home':str(home),'alias_target':target})
         state=known.get(local)
         if state and state[1]!=expected:
             raise Refused('Incomplete or changed broker identity: '+address)
@@ -173,6 +180,7 @@ def main():
     parser.add_argument('--domain',required=True);parser.add_argument('--mailboxes',required=True)
     parser.add_argument('--max-mailboxes',type=int,required=True);parser.add_argument('--total-mb',type=int,required=True);parser.add_argument('--per-box-mb',type=int,required=True)
     parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--allow-existing-layout',action='store_true',help='Root review: retain verified existing home and local-hostname alias, without moving mail or rewriting routes.')
     args=parser.parse_args()
     if os.geteuid()!=0:raise Refused('Run only from the authorized root console.')
     os.umask(0o077);parts=validated_args(args);broker=load_broker();broker.verify_domain(args.domain)
@@ -185,7 +193,7 @@ def main():
         raise Refused('Other domains already consume this client pack; review before reserving exactly two additional boxes.')
     if info['rows'] and any(r['local_part'] not in parts for r in info['rows']):
         raise Refused('Extra application mailboxes need separate review.')
-    records=inspect_accounts(broker,args.domain,parts,info['rows'])
+    records=inspect_accounts(broker,args.domain,parts,info['rows'],args.allow_existing_layout)
     root_count=len(list(broker.STATE.glob('*.json')))+sum(r['state_missing'] for r in records)
     if root_count+max(0,args.max_mailboxes-len(records))>broker.settings()['max_accounts']:
         raise Refused('Root broker limit does not leave room for the remaining pack slots.')
@@ -193,6 +201,9 @@ def main():
     print('Import: '+', '.join(r['local_part']+'@'+args.domain for r in records))
     print('Pack: '+str(args.max_mailboxes)+' mailboxes; '+str(args.total_mb)+' MB allocated; '+str(args.per_box_mb)+' MB per box.')
     print('Missing routes: '+', '.join(r['local_part'] for r in records if r['alias_missing']))
+    for row in records:
+        if 'home' in row['record']:
+            print('Existing layout retained: '+row['local_part']+' -> '+row['record']['home']+' / '+row['record']['alias_target'])
     print('Outlook: mail.solumove.net IMAP 993 TLS; SMTP 587 STARTTLS; full email as login.')
     sql=sql_for_import(args,info,records)
     if not args.apply:
@@ -212,7 +223,7 @@ def main():
     committed=False
     try:
         # Recheck identities after stopping the single-threaded broker.
-        fresh=inspect_accounts(broker,args.domain,parts,info['rows'])
+        fresh=inspect_accounts(broker,args.domain,parts,info['rows'],args.allow_existing_layout)
         old_ids={r['local_part']:r['id'] for r in records}
         # Existing UUIDs must not change; generated new UUIDs remain the reviewed IDs.
         for r in fresh:
