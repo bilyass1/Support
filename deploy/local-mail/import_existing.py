@@ -32,8 +32,14 @@ def command(args, data=None, timeout=30):
         raise Refused('Command failed: ' + Path(args[0]).name)
     return result.stdout.strip()
 
+def pg_binary(name):
+    for directory in ('/usr/pgsql-16/bin','/usr/bin'):
+        path=Path(directory)/name
+        if path.is_file() and os.access(path,os.X_OK):return str(path)
+    raise Refused('Missing PostgreSQL tool: '+name)
+
 def pg(sql):
-    output = command(['/usr/sbin/runuser','-u','postgres','--','/usr/bin/psql','-X','-qAt','-v','ON_ERROR_STOP=1','-d',DB], sql)
+    output = command(['/usr/sbin/runuser','-u','postgres','--',pg_binary('psql'),'-X','-qAt','-v','ON_ERROR_STOP=1','-d',DB], sql)
     return json.loads(output) if output else None
 
 def literal(value):
@@ -144,6 +150,10 @@ def sql_for_import(args, info, records):
     expected_snapshot=literal(json.dumps(info['subscription']['snapshot']))+'::jsonb'
     dedicated_name='Cime Events - 10 boites' if args.domain=='cimeevents.com' else args.domain+' - mail'
     old=info['subscription']['snapshot']
+    preserve=getattr(args,'preserve_subscription',False)
+    if preserve and any(old.get(key)!=value for key,value in (
+        ('mail_max_mailboxes',args.max_mailboxes),('mail_total_mb',args.total_mb),('mail_per_box_mb',args.per_box_mb))):
+        raise Refused('Requested limits must match the existing subscription exactly.')
     same_pack=old.get('name')==dedicated_name and old.get('mail_max_mailboxes')==args.max_mailboxes and old.get('mail_total_mb')==args.total_mb and old.get('mail_per_box_mb')==args.per_box_mb and old.get('id')==info['subscription']['plan_id']
     plan_id=info['subscription']['plan_id'] if same_pack else str(uuid.uuid4());domain_id=info['domain']['id'] if info['domain'] else str(uuid.uuid4())
     snapshot=dict(info['subscription']['snapshot'])
@@ -159,8 +169,8 @@ def sql_for_import(args, info, records):
  IF EXISTS(SELECT 1 FROM email_domains WHERE domain='''+domain+''' AND (organization_id<>'''+org+''' OR provider<>'postfix')) THEN RAISE EXCEPTION 'Domain belongs to another client'; END IF;
  IF (SELECT coalesce(jsonb_agg(b ORDER BY b.id),'[]'::jsonb) FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.domain='''+domain+''' AND b.status<>'cancelled')<>'''+expected_rows+''' THEN RAISE EXCEPTION 'Mailbox records changed'; END IF;
  END $$;''',
-         ('INSERT INTO plans(id,name,annual_tokens,price_minor,currency,support_level,rules,mail_max_mailboxes,mail_total_mb,mail_per_box_mb,mail_create_tokens) VALUES('+','.join(values)+');') if not same_pack else 'SELECT 1;',
-         'UPDATE subscriptions SET plan_id='+literal(plan_id)+',snapshot='+literal(json.dumps(snapshot))+'::jsonb WHERE organization_id='+org+';',
+         ('INSERT INTO plans(id,name,annual_tokens,price_minor,currency,support_level,rules,mail_max_mailboxes,mail_total_mb,mail_per_box_mb,mail_create_tokens) VALUES('+','.join(values)+');') if not same_pack and not preserve else 'SELECT 1;',
+         ('UPDATE subscriptions SET plan_id='+literal(plan_id)+',snapshot='+literal(json.dumps(snapshot))+'::jsonb WHERE organization_id='+org+';') if not preserve else 'SELECT 1;',
          'INSERT INTO email_domains(id,organization_id,domain,provider,enabled,max_mailboxes,total_quota_mb,mailbox_quota_mb,imap_host,smtp_host,smtp_port) VALUES('+','.join([literal(domain_id),org,domain,"'postfix'",'true',str(args.max_mailboxes),str(args.total_mb),str(args.per_box_mb),literal('mail.solumove.net'),literal('mail.solumove.net'),'587'])+') ON CONFLICT(domain) DO UPDATE SET enabled=true,max_mailboxes=excluded.max_mailboxes,total_quota_mb=excluded.total_quota_mb,mailbox_quota_mb=excluded.mailbox_quota_mb,imap_host=excluded.imap_host,smtp_host=excluded.smtp_host,smtp_port=excluded.smtp_port;']
     for row in records:
         if row['existing']:continue
@@ -169,10 +179,25 @@ def sql_for_import(args, info, records):
  SELECT count(*),coalesce(sum(b.quota_mb),0),coalesce(max(b.quota_mb),0) INTO n,q,biggest FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id='''+org+''' AND b.status<>'cancelled';
  IF n>'''+str(args.max_mailboxes)+''' OR q>'''+str(args.total_mb)+''' OR biggest>'''+str(args.per_box_mb)+''' THEN RAISE EXCEPTION 'Pack limit exceeded'; END IF;
  END $$;''')
-    detail={'domain':args.domain,'addresses':[r['local_part']+'@'+args.domain for r in records],'limits':{'count':args.max_mailboxes,'total_mb':args.total_mb,'per_box_mb':args.per_box_mb},'wallet_unchanged':True,'passwords_unchanged':True}
+    detail={'domain':args.domain,'addresses':[r['local_part']+'@'+args.domain for r in records],'limits':{'count':args.max_mailboxes,'total_mb':args.total_mb,'per_box_mb':args.per_box_mb},'wallet_unchanged':True,'passwords_unchanged':True,'subscription_unchanged':preserve}
     sql.append('INSERT INTO audit_events(actor_id,action,entity_id,detail) VALUES('+actor+",'import_existing_mailboxes',"+org+','+literal(json.dumps(detail))+'::jsonb);')
     sql.append('COMMIT;')
     return '\n'.join(sql)
+
+def inspect_database(args):
+    parts=args.mailboxes.split(',')
+    info=pg('''SELECT jsonb_build_object('organization',row_to_json(o),'email',(SELECT u.email FROM memberships m JOIN "user" u ON u.id=m.user_id WHERE m.organization_id=o.id),'subscription',(SELECT row_to_json(s) FROM subscriptions s WHERE s.organization_id=o.id),'active_subscription',EXISTS(SELECT 1 FROM subscriptions s WHERE s.organization_id=o.id AND s.ends_at>now()),'admin',EXISTS(SELECT 1 FROM app_roles WHERE user_id='''+literal(args.actor)+''' AND role='admin'),'domain',(SELECT row_to_json(d) FROM email_domains d WHERE d.domain='''+literal(args.domain)+'''),'other_mailboxes',(SELECT count(*) FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=o.id AND d.domain<>'''+literal(args.domain)+''' AND b.status<>'cancelled'),'rows',coalesce((SELECT jsonb_agg(b) FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.domain='''+literal(args.domain)+''' AND b.status<>'cancelled'),'[]'::jsonb)) FROM organizations o WHERE o.id='''+literal(args.organization)+';')
+    if not info or not info['email'] or not info['admin'] or not info['active_subscription']:
+        raise Refused('Missing client identity, authorized admin, or active subscription.')
+    if args.expected_email and info['email'].lower()!=args.expected_email.lower():
+        raise Refused('Selected client login does not match the expected address.')
+    if info['domain'] and (info['domain']['organization_id']!=args.organization or info['domain']['provider']!='postfix'):
+        raise Refused('Domain belongs to another client or provider.')
+    if info['other_mailboxes'] and not args.preserve_subscription:
+        raise Refused('Other domains already consume this client pack; review before reserving exactly two additional boxes.')
+    if info['rows'] and any(r['local_part'] not in parts for r in info['rows']):
+        raise Refused('Extra application mailboxes need separate review.')
+    return info
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -181,18 +206,12 @@ def main():
     parser.add_argument('--max-mailboxes',type=int,required=True);parser.add_argument('--total-mb',type=int,required=True);parser.add_argument('--per-box-mb',type=int,required=True)
     parser.add_argument('--apply',action='store_true')
     parser.add_argument('--allow-existing-layout',action='store_true',help='Root review: retain verified existing home and local-hostname alias, without moving mail or rewriting routes.')
+    parser.add_argument('--preserve-subscription',action='store_true',help='Keep the existing plan, snapshot and subscription unchanged; provided limits must match it exactly.')
+    parser.add_argument('--expected-email',help='Refuse the import if the selected client login does not match this address.')
     args=parser.parse_args()
     if os.geteuid()!=0:raise Refused('Run only from the authorized root console.')
     os.umask(0o077);parts=validated_args(args);broker=load_broker();broker.verify_domain(args.domain)
-    info=pg('''SELECT jsonb_build_object('organization',row_to_json(o),'email',(SELECT u.email FROM memberships m JOIN "user" u ON u.id=m.user_id WHERE m.organization_id=o.id),'subscription',(SELECT row_to_json(s) FROM subscriptions s WHERE s.organization_id=o.id),'active_subscription',EXISTS(SELECT 1 FROM subscriptions s WHERE s.organization_id=o.id AND s.ends_at>now()),'admin',EXISTS(SELECT 1 FROM app_roles WHERE user_id='''+literal(args.actor)+''' AND role='admin'),'domain',(SELECT row_to_json(d) FROM email_domains d WHERE d.domain='''+literal(args.domain)+'''),'other_mailboxes',(SELECT count(*) FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.organization_id=o.id AND d.domain<>'''+literal(args.domain)+''' AND b.status<>'cancelled'),'rows',coalesce((SELECT jsonb_agg(b) FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id WHERE d.domain='''+literal(args.domain)+''' AND b.status<>'cancelled'),'[]'::jsonb)) FROM organizations o WHERE o.id='''+literal(args.organization)+';')
-    if not info or not info['email'] or not info['admin'] or not info['active_subscription']:
-        raise Refused('Missing client identity, authorized admin, or active subscription.')
-    if info['domain'] and (info['domain']['organization_id']!=args.organization or info['domain']['provider']!='postfix'):
-        raise Refused('Domain belongs to another client or provider.')
-    if info['other_mailboxes']:
-        raise Refused('Other domains already consume this client pack; review before reserving exactly two additional boxes.')
-    if info['rows'] and any(r['local_part'] not in parts for r in info['rows']):
-        raise Refused('Extra application mailboxes need separate review.')
+    info=inspect_database(args)
     records=inspect_accounts(broker,args.domain,parts,info['rows'],args.allow_existing_layout)
     root_count=len(list(broker.STATE.glob('*.json')))+sum(r['state_missing'] for r in records)
     if root_count+max(0,args.max_mailboxes-len(records))>broker.settings()['max_accounts']:
@@ -200,6 +219,7 @@ def main():
     print('Client: '+info['organization']['name']+' / '+info['email'])
     print('Import: '+', '.join(r['local_part']+'@'+args.domain for r in records))
     print('Pack: '+str(args.max_mailboxes)+' mailboxes; '+str(args.total_mb)+' MB allocated; '+str(args.per_box_mb)+' MB per box.')
+    if args.preserve_subscription:print('Existing subscription and plan preserved exactly; no token charge for imported mailboxes.')
     print('Missing routes: '+', '.join(r['local_part'] for r in records if r['alias_missing']))
     for row in records:
         if 'home' in row['record']:
@@ -210,9 +230,9 @@ def main():
         print('DRY RUN OK. No users, passwords, messages, maps or database records changed.');return
     backup=BACKUPS/('mail-import-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]);backup.mkdir(parents=True,mode=0o700)
     with (backup/'database.dump').open('wb') as stream:
-        r=subprocess.run(['/usr/sbin/runuser','-u','postgres','--','/usr/bin/pg_dump','-Fc',DB],stdout=stream,stderr=subprocess.PIPE,check=False)
+        r=subprocess.run(['/usr/sbin/runuser','-u','postgres','--',pg_binary('pg_dump'),'--no-password','--lock-wait-timeout=30s','-Fc',DB],stdout=stream,stderr=subprocess.PIPE,check=False,timeout=180)
         if r.returncode:raise Refused('Database backup failed.')
-    command(['/usr/bin/pg_restore','--list',str(backup/'database.dump')])
+    command([pg_binary('pg_restore'),'--list',str(backup/'database.dump')])
     shutil.copy2(broker.ALIAS,backup/'virtual');shutil.copy2(str(broker.ALIAS)+'.db',backup/'virtual.db')
     shutil.copytree(broker.STATE,backup/'broker-state')
     (backup/'import.sql').write_text(sql)
@@ -227,6 +247,9 @@ def main():
         old_ids={r['local_part']:r['id'] for r in records}
         # Existing UUIDs must not change; generated new UUIDs remain the reviewed IDs.
         for r in fresh:
+            reviewed=next(row for row in records if row['local_part']==r['local_part'])
+            if r['record']!=reviewed['record'] or r['alias_missing']!=reviewed['alias_missing']:
+                raise Refused('System identity or route changed during import.')
             if (r['existing'] or not r['state_missing']) and r['id']!=old_ids[r['local_part']]:raise Refused('Identity changed during import.')
         for row in records:
             if row['state_missing']:
@@ -237,7 +260,7 @@ def main():
                 broker.add_alias(row['local_part']+'@'+args.domain,row['record']['username'],row['id'])
 
         # One transaction; expected snapshot protects against concurrent plan changes.
-        command(['/usr/sbin/runuser','-u','postgres','--','/usr/bin/psql','-X','-q','-v','ON_ERROR_STOP=1','-d',DB],data=sql,timeout=60)
+        command(['/usr/sbin/runuser','-u','postgres','--',pg_binary('psql'),'-X','-q','-v','ON_ERROR_STOP=1','-d',DB],data=sql,timeout=60)
         committed=True
     finally:
         if not committed:

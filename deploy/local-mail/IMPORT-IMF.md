@@ -48,3 +48,11 @@ Vérifier le nom du client, les deux adresses, les homes affichés et `DRY RUN O
 Après `IMPORT OK`, le client voit les deux adresses dans « Messagerie & Outlook », peut créer de nouvelles boîtes dans les limites de son pack, et changer le mot de passe de ses propres boîtes. Connexion Outlook : identifiant email complet, `mail.solumove.net`, IMAP 993 TLS et SMTP 587 STARTTLS. Les Mo affichés restent des allocations commerciales ; aucun quota physique Dovecot n’est créé.
 
 Ce guide et les tests locaux préparent l’import. Ils ne prouvent pas que l’association est déjà appliquée à votre base de production, ni que l’envoi/réception réels ont été testés après la mise à jour.
+
+## Conserver exactement la formule du client
+
+Si le client possède déjà les plafonds nécessaires, passer `--preserve-subscription` à l’importeur avec **les mêmes valeurs** que son snapshot actif. Il refuse une différence et ne crée ni formule dédiée ni mise à jour d’abonnement. `--expected-email` vérifie également l’identité de connexion sélectionnée. Les crédits et mots de passe restent conservés.
+
+Le contrôleur root `import-client.py` automatise la préparation et cet import sans modification de formule. Il reçoit les identifiants du client et de l’admin uniquement en paramètres sur le VPS. Il vérifie le client, les comptes Unix et les routes existantes avant d’installer le connecteur dans son répertoire root protégé. Il conserve les domaines déjà autorisés et leur capacité, ajoute uniquement le domaine demandé et réserve sa capacité actuelle. L’importeur conserve son fonctionnement en transaction avec sauvegardes. Le socket local est configuré dans la release active seulement si nécessaire.
+
+L’aperçu est le comportement par défaut ; `--apply` réalise l’action autorisée. Utiliser une révision GitHub complète et immuable pour `--source-ref`, identique à celle du contrôleur téléchargé. Le contrôleur ne reconstruit pas Next.js et ne change pas les mots de passe. Après `IMPORT_TERMINE` et `CONNECTEUR_OK`, le client retrouve ses adresses et les actions existantes « Changer le mot de passe » et « Paramètres Outlook ».
