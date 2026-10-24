@@ -18,6 +18,11 @@ curl --noproxy '*' --fail --silent --show-error --max-time 15 \
 
 cd "$imf_new"
 runuser -u supportflow -- "$imf_node" --env-file=.env.local scripts/check-notifications.mjs
+imf_public_url="$(runuser -u supportflow -- "$imf_node" --env-file=.env.local -e '
+  const url=new URL(process.env.BETTER_AUTH_URL);
+  if(url.protocol!=="https:"||url.username||url.password)process.exit(1);
+  process.stdout.write(url.origin);
+')"
 runuser -u supportflow -- "$imf_node" --env-file=.env.local --input-type=module <<'NODE'
 import nodemailer from 'nodemailer';
 import {Pool} from 'pg';
@@ -129,7 +134,7 @@ curl --noproxy '*' --fail --silent --show-error \
   --retry 15 --retry-connrefused --retry-delay 1 --max-time 15 \
   --output /dev/null --write-out 'LOCAL : HTTP %{http_code}\n' http://127.0.0.1:3101/login
 curl --fail --silent --show-error --retry 3 --retry-delay 1 --max-time 20 \
-  --output /dev/null --write-out 'HTTPS : HTTP %{http_code}\n' https://support.solumove.net/login
+  --output /dev/null --write-out 'HTTPS : HTTP %{http_code}\n' "$imf_public_url/login"
 systemctl is-active --quiet supportflow.service
 trap - ERR
 echo 'APPLICATION_EN_LIGNE — nouvelle version active.'
