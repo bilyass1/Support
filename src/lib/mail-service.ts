@@ -78,9 +78,9 @@ async function perform(actor: Actor, input: MailAction) {
       if (current && allocated.count && current.provider !== input.provider) {
         throw new DomainError('Le fournisseur ne peut pas changer tant que des boîtes sont associées.', 409);
       }
-      if (input.enabled && input.provider === 'mailcow') {
-        if (!mailProviderAvailable()) throw new DomainError('Configurez le connecteur Mailcow avant d’activer le domaine.', 503);
-        try { await verifyMailDomain(input.domain); }
+      if (input.enabled && input.provider !== 'manual') {
+        if (!mailProviderAvailable(input.provider)) throw new DomainError('Configurez le connecteur de messagerie avant d’activer le domaine.', 503);
+        try { await verifyMailDomain(input.domain, input.provider); }
         catch (error) {
           if (error instanceof DomainError) throw error;
           throw new DomainError('Impossible de vérifier ce domaine chez le fournisseur.', 502);
@@ -133,10 +133,17 @@ async function perform(actor: Actor, input: MailAction) {
     }
     access(actor, domain.organization_id);
     if (!domain.enabled) throw new DomainError('Ce domaine est en attente de configuration par l’administrateur.', 409);
-    if (domain.provider === 'mailcow' && !mailProviderAvailable()) throw new DomainError('Connecteur de messagerie indisponible.', 503);
+    if (domain.provider !== 'manual' && !mailProviderAvailable(domain.provider)) throw new DomainError('Connecteur de messagerie indisponible.', 503);
     const operation = input.type === 'create_mailbox' ? 'create' : input.operation;
-    if (domain.provider === 'mailcow' && ['create', 'reset_password'].includes(operation) && !input.password) {
+    if (domain.provider !== 'manual' && ['create', 'reset_password'].includes(operation) && !input.password) {
       throw new DomainError('Choisissez un mot de passe de 12 caractères minimum.', 400);
+    }
+    if (domain.provider === 'postfix' && ['suspend', 'resume'].includes(operation)) {
+      throw new DomainError('Suspension et réactivation non disponibles pour ce connecteur.', 409);
+    }
+    if (domain.provider === 'postfix' && input.type === 'create_mailbox' &&
+        Buffer.byteLength(input.local_part + '-' + domain.domain) > 32) {
+      throw new DomainError('Adresse trop longue pour un compte mail Linux (32 caractères avec le domaine).', 400);
     }
     const state = domain.provider === 'manual' ? 'pending' : 'processing';
     if (input.type === 'create_mailbox') {
@@ -174,3 +181,4 @@ async function perform(actor: Actor, input: MailAction) {
   await transaction(c => complete(c, actor, reserved.domain, reserved.mailbox));
   return {message: 'Opération confirmée par le serveur de messagerie.'};
 }
+

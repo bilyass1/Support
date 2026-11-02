@@ -10,7 +10,7 @@ const password = z.string().min(12).max(128).refine(value => !/[\r\n\u0000]/.tes
 export const mailActionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('save_domain'), id: id.optional(), organization_id: id, domain: hostname,
-    provider: z.enum(['manual', 'mailcow']), enabled: z.boolean(),
+    provider: z.enum(['manual', 'mailcow', 'postfix']), enabled: z.boolean(),
     max_mailboxes: z.number().int().min(1).max(1_000_000).nullable(),
     total_quota_mb: quota, mailbox_quota_mb: quota, imap_host: hostname, smtp_host: hostname,
     smtp_port: z.union([z.literal(465), z.literal(587)])
@@ -27,7 +27,7 @@ export const mailActionSchema = z.discriminatedUnion('type', [
 ]);
 export type MailAction = z.infer<typeof mailActionSchema>;
 export type MailDomain = {
-  id: string; organization_id: string; domain: string; provider: 'manual' | 'mailcow'; enabled: boolean;
+  id: string; organization_id: string; domain: string; provider: 'manual' | 'mailcow' | 'postfix'; enabled: boolean;
   max_mailboxes: number | null; total_quota_mb: number; mailbox_quota_mb: number;
   imap_host: string; smtp_host: string; smtp_port: 465 | 587;
   mailbox_count: number; allocated_quota_mb: number;
@@ -40,3 +40,4 @@ export type Mailbox = {
   operation_started_at: string | null;
 };
 export type MailWorkspace = {domains: MailDomain[]; mailboxes: Mailbox[]; automatic_available: boolean; page: number; total_mailboxes: number};
+

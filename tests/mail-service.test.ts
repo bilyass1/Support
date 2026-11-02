@@ -25,7 +25,7 @@ const run = (actor: Actor, input: unknown) => mailAct(actor, mailActionSchema.pa
 const rows = async <T = Record<string, unknown>>(sql: string, args: unknown[] = []) => (await harness.db.query<T>(sql, args)).rows;
 beforeAll(async () => {
   harness.db = new PGlite();
-  for (const name of ['001_initial.sql', '002_email.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
+  for (const name of ['001_initial.sql', '002_email.sql', '003_local_mail.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
 });
 afterAll(async () => {await harness.db.close();});
 beforeEach(async () => {
@@ -115,7 +115,7 @@ describe('email organizations and provisioning', () => {
   it('confirms automatic creation and password changes without persisting their secrets', async () => {
     const d = await domain({provider: 'mailcow'}); const box = await create(d);
     expect(box.status).toBe('active'); expect(box.operation).toBeNull();
-    expect(harness.verify).toHaveBeenCalledWith('client.example');
+    expect(harness.verify).toHaveBeenCalledWith('client.example', 'mailcow');
     await run(client, {type: 'mailbox_operation', mailbox_id: box.id, operation: 'reset_password', password: secret});
     expect(harness.provision).toHaveBeenCalledTimes(2);
     const stored = JSON.stringify(await rows('SELECT * FROM email_mailboxes')) + JSON.stringify(await rows('SELECT * FROM audit_events'));
@@ -151,6 +151,19 @@ describe('email organizations and provisioning', () => {
     expect((await mailWorkspace(other)).total_mailboxes).toBe(0);
     await expect(create(d, 'manager', 1, {...admin, role: 'manager'})).rejects.toThrow('refusé');
   });
+  it('creates local mailboxes with passwords and preserves tenant isolation', async () => {
+    const d = await domain({domain: 'cimeevents.com', provider: 'postfix'});
+    expect(harness.verify).toHaveBeenCalledWith('cimeevents.com', 'postfix');
+    await expect(run(client, {type: 'create_mailbox', domain_id: d.id, local_part: 'new', display_name: 'New', quota_mb: 100})).rejects.toThrow('mot de passe');
+    await expect(create(d, 'other', 100, other)).rejects.toThrow('refusé');
+    const box = await create(d, 'new', 100);
+    expect(box.status).toBe('active');
+    await expect(run(client, {type: 'mailbox_operation', mailbox_id: box.id, operation: 'suspend'})).rejects.toThrow('non disponibles');
+    await expect(create(d, 'a'.repeat(30), 100)).rejects.toThrow('trop longue');
+    await run(client, {type: 'mailbox_operation', mailbox_id: box.id, operation: 'reset_password', password: secret});
+    const audits = await rows<{detail: unknown}>('SELECT detail FROM audit_events');
+    expect(JSON.stringify(audits)).not.toContain(secret);
+  });
   it('applies the additive email migration idempotently without removing original records', async () => {
     const d = await domain(); await create(d);
     await harness.db.exec(await readFile(new URL('../db/002_email.sql', import.meta.url), 'utf8'));
@@ -158,3 +171,4 @@ describe('email organizations and provisioning', () => {
     expect((await mailWorkspace(client)).mailboxes).toHaveLength(1);
   });
 });
+
