@@ -58,3 +58,14 @@ export async function provisionMailbox(domain: MailDomain, mailbox: Mailbox, pas
     await request('edit/mailbox', {items: [address], attr});
   }
 }
+/** Real consumption per mailbox, as reported by Mailcow (quota_used in bytes, logins as Unix seconds). */
+export async function mailboxUsage(domain: string) {
+  const result = await request('get/mailbox/all/' + encodeURIComponent(domain));
+  if (!Array.isArray(result)) return [];
+  const number = (value: unknown) => { const parsed = Number(value); return Number.isFinite(parsed) && parsed > 0 ? parsed : 0; };
+  return result.filter(item => item && typeof item === 'object' && item.domain === domain && typeof item.local_part === 'string').map(item => {
+    const login = Math.max(number(item.last_imap_login), number(item.last_pop3_login), number(item.last_smtp_login));
+    return {local_part: item.local_part as string, used_mb: Math.ceil(number(item.quota_used) / 1_048_576),
+      messages: Math.round(number(item.messages)), last_login_at: login ? new Date(login * 1000).toISOString() : null};
+  });
+}

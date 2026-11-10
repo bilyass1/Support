@@ -1,6 +1,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 const harness = vi.hoisted(() => ({session: vi.fn(), actor: vi.fn(), act: vi.fn(), workspace: vi.fn()}));
-vi.mock('../src/lib/auth', () => ({auth: {api: {getSession: harness.session}}}));
+vi.mock('../src/lib/auth', () => ({auth: {api: {getSession: harness.session}}, twoFactorRequired: () => true}));
+vi.mock('next/server', () => ({after: () => {}}));
+vi.mock('../src/lib/dispatch', () => ({flushDeliveries: async () => ({})}));
 vi.mock('../src/lib/service', () => ({getActor: harness.actor}));
 vi.mock('../src/lib/mail-service', () => ({mailAct: harness.act, mailWorkspace: harness.workspace}));
 import { GET, POST } from '../src/app/api/mail/route';
@@ -10,13 +12,20 @@ function post(body: unknown, origin = 'https://support.example') {
 }
 beforeEach(() => {
   vi.stubEnv('BETTER_AUTH_URL', 'https://support.example');
-  harness.session.mockReset().mockResolvedValue({user: {id: 'client', name: 'Client'}});
+  harness.session.mockReset().mockResolvedValue({user: {id: 'client', name: 'Client', twoFactorEnabled: true}});
   harness.actor.mockReset().mockResolvedValue(actor);
   harness.act.mockReset().mockResolvedValue({message: 'Demande enregistrée.'});
   harness.workspace.mockReset().mockResolvedValue({domains: [], mailboxes: []});
 });
 afterEach(() => {vi.unstubAllEnvs();});
 describe('mail HTTP authentication and input boundary', () => {
+  it('refuses every request until the account has a second factor', async () => {
+    harness.session.mockResolvedValue({user: {id: 'client', name: 'Client', twoFactorEnabled: false}});
+    const response = await GET(new Request('https://support.example/api/mail'));
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('two_factor_required');
+    expect(harness.workspace).not.toHaveBeenCalled();
+  });
   it('requires an authenticated session for reads and writes', async () => {
     harness.session.mockResolvedValue(null);
     expect((await GET(new Request('https://support.example/api/mail'))).status).toBe(401);

@@ -1,9 +1,9 @@
 import type { PoolClient } from 'pg';
 import { pool, transaction } from './db';
 import { DomainError } from './domain';
-import type { Actor } from './service';
+import { moduleOn, notify, type Actor } from './service';
 import type { MailAction, MailDomain, Mailbox } from './mail-validation';
-import { mailProviderAvailable, provisionMailbox, verifyMailDomain } from './mail-provider';
+import { mailProviderAvailable, mailboxUsage, provisionMailbox, verifyMailDomain } from './mail-provider';
 
 function admin(actor: Actor) {
   if (actor.role !== 'admin') throw new DomainError('Accès réservé à l’admin.', 403);
@@ -29,12 +29,31 @@ async function complete(c: PoolClient, actor: Actor, domain: MailDomain, mailbox
   await c.query(`UPDATE email_mailboxes SET status=$2,operation=NULL,operation_state=NULL,operation_started_at=NULL WHERE id=$1`,
     [mailbox.id, targetStatus(mailbox)]);
   await audit(c, actor, 'completed', mailbox.id, {operation: mailbox.operation});
-  await c.query('INSERT INTO notifications(organization_id,message) VALUES ($1,$2)',
-    [domain.organization_id, `Messagerie : opération terminée pour ${mailbox.local_part}@${domain.domain}.`]);
+  await notify(c, {org: domain.organization_id, audience: 'client', title: 'Messagerie', tab: 'mail',
+    message: `Opération terminée pour ${mailbox.local_part}@${domain.domain}.`, except: actor.id});
+}
+
+/** Refreshes real storage use, message counts and last sign-in from the provider. Manual domains have no source to read. */
+export async function syncMailUsage(actor?: Actor) {
+  if (actor) admin(actor);
+  if (!mailProviderAvailable()) return {domains: 0, mailboxes: 0};
+  const domains = await pool.query("SELECT id,domain FROM email_domains WHERE provider='mailcow' AND enabled");
+  let mailboxes = 0;
+  for (const domain of domains.rows as {id: string; domain: string}[]) {
+    for (const entry of await mailboxUsage(domain.domain)) {
+      const updated = await pool.query(`UPDATE email_mailboxes SET used_mb=$3,messages=$4,last_login_at=$5,usage_synced_at=now()
+        WHERE domain_id=$1 AND local_part=$2 AND status<>'cancelled'`,
+        [domain.id, entry.local_part, entry.used_mb, entry.messages, entry.last_login_at]);
+      mailboxes += updated.rowCount ?? 0;
+    }
+  }
+  return {domains: domains.rowCount ?? 0, mailboxes};
 }
 
 export async function mailWorkspace(actor: Actor, page = 0) {
   const scoped = actor.role === 'client';
+  if (scoped && !actor.organization_id) throw new DomainError('Accès refusé.', 403);
+  if (scoped) await moduleOn(pool, actor, actor.organization_id!, 'mail');
   const where = scoped ? ' WHERE d.organization_id=$1' : '';
   const args = scoped ? [actor.organization_id] : [];
   const offsetParameter = scoped ? '$2' : '$1';
@@ -61,6 +80,10 @@ export async function mailAct(actor: Actor, input: MailAction) {
   }
 }
 async function perform(actor: Actor, input: MailAction) {
+  if (input.type === 'sync_usage') {
+    const result = await syncMailUsage(actor);
+    return {message: result.domains ? `Utilisation relevée pour ${result.mailboxes} boîte(s).` : 'Aucun domaine automatique à relever. La mesure réelle nécessite le connecteur Mailcow.'};
+  }
   if (input.type === 'save_domain') {
     admin(actor);
     return transaction(async c => {
@@ -132,6 +155,7 @@ async function perform(actor: Actor, input: MailAction) {
       domain = (await c.query('SELECT * FROM email_domains WHERE id=$1', [mailbox!.domain_id])).rows[0];
     }
     access(actor, domain.organization_id);
+    await moduleOn(c, actor, domain.organization_id, 'mail');
     if (!domain.enabled) throw new DomainError('Ce domaine est en attente de configuration par l’administrateur.', 409);
     if (domain.provider === 'mailcow' && !mailProviderAvailable()) throw new DomainError('Connecteur de messagerie indisponible.', 503);
     const operation = input.type === 'create_mailbox' ? 'create' : input.operation;

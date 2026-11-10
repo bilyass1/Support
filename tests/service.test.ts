@@ -14,7 +14,8 @@ async function query<T=Record<string,unknown>>(sql:string,args:unknown[]=[]){ret
 beforeEach(async()=>{
   harness.db=new PGlite();
   await harness.db.exec('CREATE TABLE "user" (id text PRIMARY KEY,name text,email text); INSERT INTO "user" VALUES (\'client\',\'Client\',\'client@example.com\'),(\'other\',\'Other\',\'other@example.com\');');
-  await harness.db.exec(await readFile(new URL('../db/001_initial.sql',import.meta.url),'utf8'));
+  await harness.db.exec('CREATE TABLE session (id text PRIMARY KEY,"userId" text,"updatedAt" timestamptz);');
+  for(const file of ['001_initial.sql','002_email.sql','003_platform.sql']) await harness.db.exec(await readFile(new URL('../db/'+file,import.meta.url),'utf8'));
   const organization=await act(admin,{type:'create_organization',name:'Client One',email:'client@example.com'}) as {id:string};
   const second=await act(admin,{type:'create_organization',name:'Client Two',email:'other@example.com'}) as {id:string};
   client={id:'client',name:'Client',role:'client',organization_id:organization.id};
@@ -26,7 +27,7 @@ beforeEach(async()=>{
   appId=app.id;
 });
 afterEach(async()=>{await harness.db.close();});
-async function ticket(){return await act(client,{type:'create_ticket',application_id:appId,title:'Add a new module',description:'We need a new dashboard for our team.',category:'development'}) as {id:string};}
+async function ticket(){return await act(client,{type:'create_ticket',application_id:appId,title:'Add a new module',description:'We need a new dashboard for our team.',category:'development',priority:'normal'}) as {id:string};}
 async function wallet(){return (await query<{balance:number;reserved:number}>('SELECT balance,reserved FROM wallets WHERE organization_id=$1',[client.organization_id]))[0];}
 describe('PostgreSQL business flow',()=>{
   it('persists a complete request, quote, acceptance, delivery and consumption',async()=>{
@@ -54,8 +55,8 @@ describe('PostgreSQL business flow',()=>{
     const t=await ticket();await act(admin,{type:'quote',ticket_id:t.id,tokens:101,note:'Larger feature'});
     await expect(act(client,{type:'accept',ticket_id:t.id,estimate_revision:1})).rejects.toThrow('insuffisant');
     expect(await wallet()).toEqual({balance:100,reserved:0});
-    await expect(act(other,{type:'comment',ticket_id:t.id,body:'Unauthorized comment'})).rejects.toThrow('refusé');
-    await expect(act(other,{type:'create_ticket',application_id:appId,title:'Intrusion',description:'Invalid tenant access test.',category:'design'})).rejects.toThrow('refusé');
+    await expect(act(other,{type:'comment',ticket_id:t.id,body:'Unauthorized comment',internal:false})).rejects.toThrow('refusé');
+    await expect(act(other,{type:'create_ticket',application_id:appId,title:'Intrusion',description:'Invalid tenant access test.',category:'design',priority:'normal'})).rejects.toThrow('refusé');
     const view=await workspace(other);expect(view.tickets).toHaveLength(0);expect(view.applications).toHaveLength(0);
   });
   it('releases cancelled reservations and audits manual recharges',async()=>{

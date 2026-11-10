@@ -1,8 +1,8 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import type { Plan } from '@/lib/types';
-import type { Rule, Category } from '@/lib/domain';
-export function ActionForm({children,label,onSubmit}:{children:ReactNode;label:string;onSubmit:(data:FormData)=>Promise<boolean>}) {
+import { minorUnits, type Rule, type Category } from '@/lib/domain';
+export function ActionForm({children,label,onSubmit}:{children:ReactNode;label:string;onSubmit:(data:FormData)=>Promise<unknown>}) {
   const [pending,setPending]=useState(false);
   return <form className="form" onSubmit={async event=>{
     event.preventDefault();const form=event.currentTarget;const data=new FormData(form);setPending(true);
@@ -10,20 +10,20 @@ export function ActionForm({children,label,onSubmit}:{children:ReactNode;label:s
   }}>{children}<button className="primary" disabled={pending}>{pending?'Enregistrement…':label}</button></form>;
 }
 export function Field({label,children}:{label:string;children:ReactNode}) {return <label className="field"><span>{label}</span>{children}</label>;}
-export function PlanEditor({plan,onSave,onCancel}:{plan?:Plan;onSave:(data:Record<string,unknown>)=>Promise<boolean>;onCancel:()=>void}) {
+export function PlanEditor({plan,onSave,onCancel}:{plan?:Plan;onSave:(data:Record<string,unknown>)=>Promise<unknown>;onCancel:()=>void}) {
   const [rules,setRules]=useState<Rule[]>(plan?.rules??[]);
   const [pending,setPending]=useState(false);
   function update(index:number,rule:Rule) {setRules(current=>current.map((r,i)=>i===index?rule:r));}
   return <form className="form" onSubmit={async e=>{
     e.preventDefault();const data=new FormData(e.currentTarget);setPending(true);
-    try {if(await onSave({type:'save_plan',id:plan?.id,name:data.get('name'),annual_tokens:Number(data.get('annual_tokens')),price_minor:Number(data.get('price_minor')),currency:data.get('currency'),support_level:data.get('support_level'),apply_to_existing:data.get('apply')==='on',rules}))onCancel();}
+    try {if(await onSave({type:'save_plan',id:plan?.id,name:data.get('name'),annual_tokens:Number(data.get('annual_tokens')),price_minor:Math.round(Number(data.get('price'))*minorUnits(String(data.get('currency')))),currency:data.get('currency'),support_level:data.get('support_level'),apply_to_existing:data.get('apply')==='on',rules}))onCancel();}
     finally{setPending(false);}
   }}>
     <h3>{plan?'Modifier la formule':'Nouvelle formule'}</h3>
     <div className="form-grid">
       <Field label="Nom"><input name="name" required minLength={2} maxLength={80} defaultValue={plan?.name}/></Field>
       <Field label="Quota annuel de crédits"><input name="annual_tokens" type="number" min={0} max={1000000} required defaultValue={plan?.annual_tokens??100}/></Field>
-      <Field label="Prix annuel en unité mineure (TND : millimes)"><input name="price_minor" type="number" min={0} max={1000000} required defaultValue={plan?.price_minor??0}/></Field>
+      <Field label="Prix annuel hors taxes"><input name="price" type="number" min={0} max={2000000} step="0.001" required defaultValue={plan?plan.price_minor/minorUnits(plan.currency):0}/></Field>
       <Field label="Devise"><select name="currency" defaultValue={plan?.currency??'TND'}><option>TND</option><option>EUR</option><option>USD</option></select></Field>
       <Field label="Niveau de support"><input name="support_level" required defaultValue={plan?.support_level??'Standard'}/></Field>
     </div>
