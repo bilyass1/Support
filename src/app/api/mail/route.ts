@@ -1,3 +1,5 @@
+import { after } from 'next/server';
+import { flushDeliveries } from '@/lib/dispatch';
 import { authenticated, failure, sameOrigin } from '@/lib/request';
 import { DomainError } from '@/lib/domain';
 import { mailWorkspace, mailAct } from '@/lib/mail-service';
@@ -24,6 +26,8 @@ export async function POST(request: Request) {
     try { value = JSON.parse(raw); } catch { throw new DomainError('JSON invalide.'); }
     const input = mailActionSchema.safeParse(value);
     if (!input.success) throw new DomainError('Champs de messagerie invalides. Vérifiez les noms, quotas et mots de passe.');
-    return Response.json(await mailAct(actor, input.data));
+    const result = await mailAct(actor, input.data);
+    after(() => flushDeliveries().catch(() => console.error('Delivery flush failed')));
+    return Response.json(result);
   } catch (error) { return failure(error); }
 }
