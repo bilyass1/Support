@@ -3,6 +3,7 @@ import { pool, transaction } from './db';
 import { createHash, randomBytes } from 'node:crypto';
 import { credits, moduleOn, type Actor } from './service';
 import { DomainError, MODULES } from './domain';
+import { monitorUrl } from './monitor.mjs';
 
 const id=z.uuid(), text=z.string().trim().min(3).max(2000);
 const amount=z.number().int().min(0).max(100_000_000);
@@ -17,6 +18,8 @@ export const platformSchema=z.discriminatedUnion('type',[
  z.object({type:z.literal('invoice_status'),id,status:z.enum(['paid','void']),note:text}),
  z.object({type:z.literal('read_notification'),id}),
  z.object({type:z.literal('read_all_notifications')}),
+ z.object({type:z.literal('save_site'),id:id.optional(),organization_id:id,label:z.string().trim().min(2).max(80),url:z.string().trim().min(8).max(300),domain_expires_at:z.iso.date().nullish(),enabled:z.boolean().default(true)}),
+ z.object({type:z.literal('delete_site'),id}),
  z.object({type:z.literal('set_modules'),organization_id:id,modules:z.array(z.enum(MODULES)).max(MODULES.length)}),
  z.object({type:z.literal('rotate_app_key'),application_id:id}),
  z.object({type:z.literal('reset_mfa'),user_id:z.string().min(1).max(200),reason:z.string().trim().min(15).max(1000),identity_verified:z.literal(true),admin_password:z.string().min(1).max(128)})
@@ -73,6 +76,23 @@ export async function platformAct(actor:Actor,input:PlatformAction){
   if(input.type==='issue_invoice'){admin(actor);const entity=await invoice(input.organization_id,input.description,input.amount_minor,input.currency,input.due_at,null,false);await audit(input.type,entity,input);return {message:'Facture émise et notification créée.'};}
   if(input.type==='invoice_status'){admin(actor);const r=await c.query('SELECT * FROM invoices WHERE id=$1 FOR UPDATE',[input.id]);if(!r.rowCount)throw new DomainError('Facture introuvable.',404);if(r.rows[0].status!=='issued')throw new DomainError('Facture déjà traitée.',409);await c.query('UPDATE invoices SET status=$2 WHERE id=$1',[input.id,input.status]);await audit(input.type,input.id,{status:input.status,note:input.note});await notify(r.rows[0].organization_id,'Facture '+r.rows[0].number+(input.status==='paid'?' : paiement reçu, merci.':' : annulée.'));return {message:'Statut enregistré, sans recharge automatique.'};}
   if(input.type==='read_notification'){const r=await c.query('SELECT organization_id FROM notifications WHERE id=$1',[input.id]);if(!r.rowCount)throw new DomainError('Notification introuvable.',404);own(actor,r.rows[0].organization_id);await c.query('UPDATE notifications SET read_at=coalesce(read_at,now()) WHERE id=$1',[input.id]);return {message:'Notification lue.'};}
+  if(input.type==='save_site'){
+   admin(actor);
+   // Checks run from the server: only public http(s) names are accepted, never an address or an internal host.
+   const url=monitorUrl(input.url);
+   if(!url)throw new DomainError('Adresse invalide. Utilisez une adresse publique du type https://www.exemple.tn.');
+   const values=[input.organization_id,input.label,url,input.domain_expires_at??null,input.enabled];
+   const saved=input.id
+    ?await c.query("UPDATE monitored_sites SET organization_id=$1,label=$2,url=$3,domain_expires_at=$4,enabled=$5,status=CASE WHEN url=$3 AND $5 THEN status ELSE 'unknown' END,fail_streak=0 WHERE id=$6 RETURNING id",[...values,input.id])
+    :await c.query('INSERT INTO monitored_sites(organization_id,label,url,domain_expires_at,enabled) VALUES($1,$2,$3,$4,$5) ON CONFLICT (organization_id,url) DO NOTHING RETURNING id',values);
+   if(!saved.rowCount)throw new DomainError(input.id?'Site introuvable.':'Ce site est déjà surveillé pour ce client.',input.id?404:409);
+   await audit(input.type,saved.rows[0].id,{organization_id:input.organization_id,label:input.label});return {message:'Site enregistré. Le premier contrôle a lieu dans les cinq minutes.'};
+  }
+  if(input.type==='delete_site'){
+   admin(actor);const removed=await c.query('DELETE FROM monitored_sites WHERE id=$1 RETURNING id',[input.id]);
+   if(!removed.rowCount)throw new DomainError('Site introuvable.',404);
+   await audit(input.type,input.id,{});return {message:'Site retiré de la surveillance.'};
+  }
   if(input.type==='read_all_notifications'){
    // Read state belongs to the client organization: the team reading a list must not clear it for the client.
    if(actor.role!=='client'||!actor.organization_id)return {message:''};

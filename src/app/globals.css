@@ -274,3 +274,11 @@ article.notification{display:flex;gap:12px;align-items:flex-start;border-top:1px
 .token-hero svg{max-height:96px}
 .page-heading h1{font-size:28px}
 @media(max-width:760px){.pipeline{grid-template-columns:repeat(3,minmax(0,1fr))}.page-heading h1{font-size:22px}}
+/* Monthly charts */
+.chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.chart-card{margin-bottom:0}.chart-card .section-title strong{font-size:18px;letter-spacing:-.3px;font-variant-numeric:tabular-nums}
+.month-bars{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:10px;height:170px;align-items:end}
+.month-bars>div{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:4px;min-width:0}
+.month-bars .bar{width:100%;max-width:46px;background:var(--brand);border-radius:6px 6px 0 0;min-height:2px}.month-bars .bar-zero{background:var(--line)}
+.bar-value{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.bar-label{font-size:11.5px;color:var(--muted)}

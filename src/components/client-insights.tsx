@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { ArrowUpRight, TriangleAlert } from 'lucide-react';
 import type { Alert, ClientInsight } from '@/lib/insights';
 import { MODULES, moduleLabels } from '@/lib/domain';
-export type Insights={clients:ClientInsight[];alerts:Alert[]};
+export type Insights={clients:ClientInsight[];alerts:Alert[];stats?:import('@/lib/insights').CompanyStats};
 export function ago(value:string|null|undefined){
  if(!value)return 'jamais';
  const minutes=Math.max(0,Math.round((Date.now()-new Date(value).getTime())/60000));

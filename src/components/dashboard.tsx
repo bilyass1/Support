@@ -3,13 +3,15 @@ import { ClientProfileForm, ClientAccountDetails, ClientSelector } from './clien
 import { AdminControlCenter } from './admin-control-center';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Tickets, Users, Layers, Coins, Bell, Moon, Sun, LogOut, ArrowUpRight, Plus, Mail, Activity, ShieldCheck, LifeBuoy, Receipt, Download, Paperclip, Star, Lock, Megaphone } from 'lucide-react';
+import { LayoutDashboard, Tickets, Users, Layers, Coins, Bell, Moon, Sun, LogOut, ArrowUpRight, Plus, Mail, Activity, ShieldCheck, LifeBuoy, Receipt, Download, Paperclip, Star, Lock, Megaphone, ChartColumn } from 'lucide-react';
 import { downloadCsv } from './ui';
 import { PushGate, LockScreen } from './gates';
 import { DeviceSecurity, DevicePrompt } from './device-security';
 import { AttentionList, Client360, type Insights } from './client-insights';
 import { AppUsage } from './app-usage';
 import { SessionsPanel } from './sessions-panel';
+import { SitesMonitor } from './sites-monitor';
+import { CompanyStats } from './company-stats';
 import { authClient } from '@/lib/auth-client';
 import type { Workspace, Plan, Ticket } from '@/lib/types';
 import { suggestedCost, priorityLabels, slaBreached, slaHours } from '@/lib/domain';
@@ -27,6 +29,7 @@ const nav:{id:string;label:string;short:string;icon:typeof Bell;module?:string;a
   {id:'billing',label:'Factures',short:'Factures',icon:Receipt,module:'billing'},
   {id:'mail',label:'Messagerie & Outlook',short:'Mails',icon:Mail,module:'mail'},
   {id:'usage',label:'Applications & utilisation',short:'Applis',icon:Activity,module:'usage'},
+  {id:'stats',label:'Chiffres',short:'Chiffres',icon:ChartColumn,admin:true},
   {id:'clients',label:'Clients & applications',short:'Clients',icon:Users,admin:true},
   {id:'plans',label:'Formules',short:'Formules',icon:Layers,admin:true},
   {id:'ledger',label:'Historique des crédits',short:'Crédits',icon:Coins,module:'tokens'},
@@ -107,7 +110,8 @@ function Workspace_() {
     {allowed&&['tokens','billing','support','security'].includes(tab)?<PlatformWorkspace workspace={data} mode={tab} onChange={load}/>:null}
     {tab==='security'?<><DeviceSecurity/><SessionsPanel/></>:null}
     {allowed&&tab==='mail'?<MailWorkspace workspace={data}/>:null}
-    {allowed&&tab==='usage'?<AppUsage workspace={data} onChange={load}/>:null}
+    {allowed&&tab==='usage'?<><SitesMonitor workspace={data} onChange={load}/><AppUsage workspace={data} onChange={load}/></>:null}
+    {admin&&tab==='stats'?<CompanyStats stats={insights?.stats??null}/>:null}
     {tab==='overview'?<>
       {admin?<AttentionList insights={insights} onOpen={(next,client)=>{setClientId(client);setTab(next);}}/>:null}
       {!staff?data.announcements.slice(0,2).map(a=><section className="panel announcement" key={a.id}><Megaphone size={20}/><div><strong>{a.title}</strong><p className="preserve">{a.body}</p><span className="small muted">{day(a.created_at)}</span></div></section>):null}

@@ -20,7 +20,7 @@ describe('ticket follow-up, renewals and announcements',()=>{
   harness.db=new PGlite();
   await harness.db.exec(`CREATE TABLE "user"(id text PRIMARY KEY,name text,email text,"twoFactorEnabled" boolean);CREATE TABLE "passkey"(id text,"userId" text);
    CREATE TABLE "session"(id text,"userId" text,"updatedAt" timestamptz);CREATE TABLE "account"(id text,"providerId" text,"userId" text,password text);`);
-  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
   org=(await q<{id:string}>("INSERT INTO organizations(name) VALUES('Follow One') RETURNING id"))[0].id;
   other=(await q<{id:string}>("INSERT INTO organizations(name) VALUES('Follow Two') RETURNING id"))[0].id;
   await q('INSERT INTO wallets(organization_id,balance) VALUES($1,100),($2,0)',[org,other]);

@@ -14,7 +14,7 @@ async function query<T=Record<string,unknown>>(sql:string,args:unknown[]=[]){ret
 beforeEach(async()=>{
   harness.db=new PGlite();
   await harness.db.exec('CREATE TABLE "user" (id text PRIMARY KEY,name text,email text); INSERT INTO "user" VALUES (\'client\',\'Client\',\'client@example.com\'),(\'other\',\'Other\',\'other@example.com\');');
-  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','008_modules_usage.sql','009_ticket_followup.sql']) await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql']) await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
   const organization=await act(admin,{type:'create_organization',name:'Client One',email:'client@example.com'}) as {id:string};
   const second=await act(admin,{type:'create_organization',name:'Client Two',email:'other@example.com'}) as {id:string};
   client={id:'client',name:'Client',role:'client',organization_id:organization.id};

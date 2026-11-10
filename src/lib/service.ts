@@ -221,11 +221,16 @@ export async function workspace(actor:Actor) {
   // Every comment of the listed tickets: a global cap used to empty the discussion of older tickets.
   const ticketIds=tickets.rows.map(t=>t.id);
   const empty={rows:[] as Record<string,unknown>[]};
+  // Monitored sites belong to the "usage" module, with thirty days of availability.
+  const sites=has('usage')?await pool.query(`SELECT s.id,s.organization_id,s.label,s.url,s.domain_expires_at::text AS domain_expires_at,s.enabled,s.status,s.status_since,s.last_checked_at,s.last_latency_ms,s.ssl_expires_at,
+    coalesce(d.checks,0)::int AS checks,coalesce(d.failures,0)::int AS failures
+    FROM monitored_sites s LEFT JOIN (SELECT site_id,sum(checks) AS checks,sum(failures) AS failures FROM site_checks_daily WHERE day>current_date-30 GROUP BY 1) d ON d.site_id=s.id
+    ${scoped?'WHERE s.organization_id=$1':''} ORDER BY s.label`,values):empty;
   // Internal notes never leave the team: they are filtered out here, not in the interface.
   const [comments,attachments,announcements]=await Promise.all([
     ticketIds.length?pool.query(`SELECT c.*,u.name AS author_name,EXISTS(SELECT 1 FROM app_roles r WHERE r.user_id=c.author_id) AS from_staff FROM ticket_comments c LEFT JOIN "user" u ON u.id=c.author_id WHERE c.ticket_id=ANY($1::uuid[])${scoped?' AND NOT c.internal':''} ORDER BY c.created_at DESC`,[ticketIds]):empty,
     ticketIds.length?pool.query('SELECT id,ticket_id,name,size,created_at FROM ticket_attachments WHERE ticket_id=ANY($1::uuid[]) ORDER BY created_at',[ticketIds]):empty,
     pool.query(`SELECT id,organization_id,title,body,created_at FROM announcements${scoped?' WHERE organization_id IS NULL OR organization_id=$1':''} ORDER BY created_at DESC LIMIT 10`,values)
   ]);
-  return {actor,modules,organizations:organizations.rows,applications:applications.rows,plans:plans.rows,tickets:tickets.rows,ledger:ledger.rows,notifications:notifications.rows,comments:comments.rows,attachments:attachments.rows,announcements:announcements.rows,app_usage:appUsage.rows};
+  return {actor,modules,organizations:organizations.rows,applications:applications.rows,plans:plans.rows,tickets:tickets.rows,ledger:ledger.rows,notifications:notifications.rows,comments:comments.rows,attachments:attachments.rows,announcements:announcements.rows,sites:sites.rows,app_usage:appUsage.rows};
 }

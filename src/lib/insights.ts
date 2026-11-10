@@ -77,3 +77,30 @@ export function alerts(clients:ClientInsight[],now=Date.now()):Alert[] {
  }
  return list.sort((a,b)=>Number(b.level==='danger')-Number(a.level==='danger'));
 }
+
+export type CompanyStats={months:string[];revenue:{currency:string;paid:number[];open:number[]}[];tickets_created:number[];tickets_closed:number[];tokens_consumed:number[];
+ unpaid:{currency:string;total:number;count:number;overdue:number}[];first_response_hours:number|null;satisfaction:number|null;ratings:number;sites:{total:number;down:number}};
+/** Company figures over the last six months. Admin only. Paid revenue is grouped by the month the invoice was issued. */
+export async function companyStats(actor:Actor):Promise<CompanyStats> {
+ if(actor.role!=='admin')throw new DomainError('Action réservée à l’admin.',403);
+ const since="date_trunc('month',now())-interval '5 months'",month=(column:string)=>`to_char(date_trunc('month',${column}),'YYYY-MM')`;
+ const [calendar,invoices,created,closed,tokens,unpaid,quality,sites]=await Promise.all([
+  rows(`SELECT to_char(m,'YYYY-MM') AS month FROM generate_series(${since},date_trunc('month',now()),interval '1 month') m ORDER BY 1`),
+  rows(`SELECT ${month('issued_at')} AS month,currency,coalesce(sum(amount_minor) FILTER(WHERE status='paid'),0)::bigint AS paid,coalesce(sum(amount_minor) FILTER(WHERE status='issued'),0)::bigint AS open FROM invoices WHERE issued_at>=${since} GROUP BY 1,2`),
+  rows(`SELECT ${month('created_at')} AS month,count(*)::int AS n FROM tickets WHERE created_at>=${since} GROUP BY 1`),
+  rows(`SELECT ${month('closed_at')} AS month,count(*)::int AS n FROM tickets WHERE closed_at>=${since} GROUP BY 1`),
+  rows(`SELECT ${month('created_at')} AS month,coalesce(-sum(balance_delta),0)::int AS n FROM credit_ledger WHERE kind='consume' AND created_at>=${since} GROUP BY 1`),
+  rows(`SELECT currency,sum(amount_minor)::bigint AS total,count(*)::int AS count,count(*) FILTER(WHERE due_at<current_date)::int AS overdue FROM invoices WHERE status='issued' GROUP BY 1 ORDER BY 1`),
+  rows(`SELECT (SELECT avg(extract(epoch FROM first_response_at-created_at))/3600 FROM tickets WHERE first_response_at IS NOT NULL AND created_at>now()-interval '90 days') AS hours,
+   (SELECT avg(rating) FROM tickets WHERE rating IS NOT NULL) AS rating,(SELECT count(*)::int FROM tickets WHERE rating IS NOT NULL) AS ratings`),
+  rows(`SELECT count(*) FILTER(WHERE enabled)::int AS total,count(*) FILTER(WHERE enabled AND status='down')::int AS down FROM monitored_sites`)
+ ]);
+ const months=calendar.map(r=>String(r.month));
+ const series=(list:Record<string,unknown>[],key='n')=>months.map(m=>Number(list.find(r=>r.month===m)?.[key]??0));
+ const currencies=[...new Set(invoices.map(r=>String(r.currency)))].sort();
+ const number=(value:unknown)=>value===null||value===undefined?null:Math.round(Number(value)*10)/10;
+ return {months,revenue:currencies.map(currency=>{const mine=invoices.filter(r=>r.currency===currency);return {currency,paid:series(mine,'paid'),open:series(mine,'open')};}),
+  tickets_created:series(created),tickets_closed:series(closed),tokens_consumed:series(tokens),
+  unpaid:unpaid.map(r=>({currency:String(r.currency),total:Number(r.total),count:Number(r.count),overdue:Number(r.overdue)})),
+  first_response_hours:number(quality[0]?.hours),satisfaction:number(quality[0]?.rating),ratings:Number(quality[0]?.ratings??0),sites:{total:Number(sites[0]?.total??0),down:Number(sites[0]?.down??0)}};
+}

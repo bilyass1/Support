@@ -1,0 +1,10 @@
+[Unit]
+Description=Check monitored sites every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=supportflow-monitor.service
+
+[Install]
+WantedBy=timers.target

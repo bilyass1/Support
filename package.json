@@ -12,7 +12,8 @@
     "admin:grant": "node --env-file=.env.local scripts/grant-admin.mjs",
     "test:e2e": "playwright test",
     "notifications:deliver": "node --env-file=.env.local scripts/deliver-notifications.mjs",
-    "notifications:check": "node --env-file=.env.local scripts/check-notifications.mjs"
+    "notifications:check": "node --env-file=.env.local scripts/check-notifications.mjs",
+    "monitor:run": "node --env-file=.env.local scripts/monitor.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
