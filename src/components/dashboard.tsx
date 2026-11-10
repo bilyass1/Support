@@ -1,113 +1,76 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutDashboard, Tickets, Users, Coins, Bell, Moon, Sun, LogOut, Mail, Receipt, Activity, ShieldCheck, Settings2, TriangleAlert } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { LayoutDashboard, Tickets, Users, Layers, Coins, Bell, Moon, Sun, LogOut, ArrowUpRight, Plus, Mail } from 'lucide-react';
 import { authClient } from '@/lib/auth-client';
-import type { Workspace, Go, Run } from '@/lib/types';
-import type { Module } from '@/lib/domain';
-import { PushGate, LockScreen } from './gates';
+import type { Workspace, Plan, Ticket } from '@/lib/types';
+import { suggestedCost } from '@/lib/domain';
+import { ActionForm,Field,PlanEditor } from './forms';
 import { MailWorkspace } from './mail-workspace';
-import { Overview } from './views/overview';
-import { TicketsView } from './views/tickets';
-import { BillingView } from './views/billing';
-import { UsageView } from './views/usage';
-import { ClientsView } from './views/clients';
-import { AdminView } from './views/admin';
-import { LedgerView, NotificationsView } from './views/activity';
-import { SecurityView } from './views/security';
-
-type NavItem={id:string;label:string;short:string;icon:typeof Bell;module?:Module;role?:'staff'|'admin'};
-const nav:NavItem[]=[
-  {id:'overview',label:'Tableau de bord',short:'Accueil',icon:LayoutDashboard},
-  {id:'tickets',label:'Demandes & support',short:'Demandes',icon:Tickets,module:'tickets'},
-  {id:'billing',label:'Facturation',short:'Factures',icon:Receipt,module:'billing'},
-  {id:'usage',label:'Applications & utilisation',short:'Applications',icon:Activity,module:'usage'},
-  {id:'mail',label:'Messagerie',short:'Messagerie',icon:Mail,module:'mail'},
-  {id:'ledger',label:'Crédits',short:'Crédits',icon:Coins,module:'credits'},
-  {id:'clients',label:'Clients · vue 360°',short:'Clients',icon:Users,role:'staff'},
-  {id:'admin',label:'Administration',short:'Admin',icon:Settings2,role:'admin'},
-  {id:'notifications',label:'Notifications',short:'Alertes',icon:Bell},
-  {id:'security',label:'Sécurité',short:'Sécurité',icon:ShieldCheck}
-];
-const roleLabels={admin:'Administrateur',manager:'Manager',client:'Client'};
-export function Dashboard({email}:{email:string}) {
-  const [pushConfigured,setPushConfigured]=useState(true);
-  return <PushGate onStatus={setPushConfigured}><LockScreen email={email}><Workspace_ email={email} pushConfigured={pushConfigured}/></LockScreen></PushGate>;
-}
-function Workspace_({email,pushConfigured}:{email:string;pushConfigured:boolean}) {
-  const [data,setData]=useState<Workspace|null>(null),[tab,setTab]=useState('overview'),[ticket,setTicket]=useState<string|null>(null);
-  const [error,setError]=useState(''),[success,setSuccess]=useState(''),[dark,setDark]=useState(false);
-  const timer=useRef<number|undefined>(undefined);
+const statuses:Record<string,string>={new:'Nouveau',quoted:'À valider',accepted:'Accepté',in_progress:'En cours',ready:'À tester',closed:'Clôturé',cancelled:'Annulé'};
+const nav=[{id:'overview',label:'Vue d’ensemble',icon:LayoutDashboard},{id:'tickets',label:'Demandes',icon:Tickets},{id:'mail',label:'Messagerie & Outlook',icon:Mail},{id:'clients',label:'Clients & applications',icon:Users},{id:'plans',label:'Formules',icon:Layers},{id:'ledger',label:'Historique des crédits',icon:Coins},{id:'notifications',label:'Notifications',icon:Bell}];
+export function Dashboard() {
+  const [data,setData]=useState<Workspace|null>(null),[tab,setTab]=useState('overview'),[error,setError]=useState(''),[success,setSuccess]=useState('');
+  const [dark,setDark]=useState(false),[filter,setFilter]=useState(''),[newTicket,setNewTicket]=useState(false),[planEditor,setPlanEditor]=useState<Plan|'new'|null>(null),[selected,setSelected]=useState<string|null>(null),[pending,setPending]=useState(false);
   const load=useCallback(async()=>{
     const response=await fetch('/api/workspace',{cache:'no-store'});
     if(response.status===401){window.location.assign('/login');return;}
-    const value=await response.json();
-    if(value.code==='two_factor_required'){window.location.assign('/securite');return;}
-    if(!response.ok)throw new Error(value.error);
-    setData(value);
+    const value=await response.json();if(!response.ok)throw new Error(value.error);setData(value);
   },[]);
-  useEffect(()=>{
-    const params=new URLSearchParams(window.location.search);
-    if(params.get('tab'))setTab(params.get('tab')!);
-    if(params.get('ticket'))setTicket(params.get('ticket'));
-    setDark(document.documentElement.dataset.theme==='dark');
-    load().catch(e=>setError(e.message));
-    // Keep the workspace fresh without a manual reload.
-    const refresh=()=>{if(document.visibilityState==='visible')load().catch(()=>{});};
-    const interval=window.setInterval(refresh,60_000);
-    document.addEventListener('visibilitychange',refresh);
-    return()=>{window.clearInterval(interval);document.removeEventListener('visibilitychange',refresh);};
-  },[load]);
-  const go:Go=useCallback((next,nextTicket=null)=>{
-    setTab(next);setTicket(nextTicket);setError('');
-    window.history.replaceState(null,'','/?tab='+next+(nextTicket?'&ticket='+nextTicket:''));
-    window.scrollTo({top:0});
-  },[]);
-  const run:Run=useCallback(async(body,message='Modification enregistrée.')=>{
-    setError('');setSuccess('');window.clearTimeout(timer.current);
+  useEffect(()=>{load().catch(e=>setError(e.message));setDark(localStorage.getItem('supportflow:theme:v1')==='dark');},[load]);
+  useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';},[dark]);
+  async function action(body:Record<string,unknown>) {
+    setPending(true);setError('');setSuccess('');
     try {
       const response=await fetch('/api/actions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const result=await response.json();if(!response.ok)throw new Error(result.error);
-      await load();
-      if(message){setSuccess(message);timer.current=window.setTimeout(()=>setSuccess(''),4000);}
-      return result;
-    }catch(e){setError(e instanceof Error?e.message:'Une erreur est survenue.');window.scrollTo({top:0,behavior:'smooth'});return null;}
-  },[load]);
-  useEffect(()=>{if(tab==='notifications'&&data?.unread)run({type:'mark_seen'},'');},[tab,data?.unread,run]);
-  if(!data)return <main className="login-page">{error?<div className="login-card"><p className="error" role="alert">{error}</p><button onClick={()=>window.location.reload()}>Réessayer</button></div>:<p className="muted">Chargement de votre espace…</p>}</main>;
+      await load();setSuccess('Modification enregistrée.');return true;
+    }catch(e){setError(e instanceof Error?e.message:'Une erreur est survenue.');return false;}finally{setPending(false);}
+  }
+  if(!data)return <main className="loading"><div className="brand">SupportFlow</div>{error?<p className="error" role="alert">{error}</p>:<p>Chargement de votre espace…</p>}</main>;
   const staff=data.actor.role!=='client',admin=data.actor.role==='admin';
-  const items=nav.filter(n=>(!n.module||data.modules.includes(n.module))&&(!n.role||(n.role==='staff'?staff:admin)));
-  const current=items.find(n=>n.id===tab)??items[0];
-  const props={data,run,go,staff,admin,reload:load};
-  const waiting=!staff&&!data.organizations.length;
-  function theme(){const next=dark?'light':'dark';try{localStorage.setItem('supportflow:theme:v1',next);}catch{}document.documentElement.dataset.theme=next;setDark(!dark);}
-  return <div className="shell">
-    <aside className="sidebar"><div className="brand"><span className="brand-icon">S</span>SupportFlow</div>
-      <div className="workspace-label">{staff?'ESPACE ÉQUIPE':data.organizations[0]?.name?.toUpperCase()??'ESPACE CLIENT'}</div>
-      <nav aria-label="Navigation principale">{items.map(n=><button key={n.id} className={current.id===n.id?'nav-active':''} aria-current={current.id===n.id?'page':undefined} onClick={()=>go(n.id)}>
-        <n.icon size={19}/><span className="nav-long">{n.label}</span><span className="nav-short">{n.short}</span>
-        {n.id==='notifications'&&data.unread?<span className="pill">{data.unread}</span>:null}
-        {n.id==='overview'&&staff&&data.alerts.length?<span className="pill pill-danger">{data.alerts.length}</span>:null}
-      </button>)}</nav>
-      <div className="sidebar-bottom"><div className="avatar">{data.actor.name.slice(0,1).toUpperCase()}</div><div className="who"><strong>{data.actor.name}</strong><span>{roleLabels[data.actor.role]}</span></div>
-        <button title="Se déconnecter" aria-label="Se déconnecter" onClick={async()=>{await authClient.signOut();window.location.assign('/login');}}><LogOut size={17}/></button></div>
-    </aside>
-    <main className="main"><header className="topbar"><div><p className="eyebrow">{staff?'PILOTAGE':'VOTRE ESPACE'}</p><h1>{current.label}</h1></div>
-      <div className="actions"><button className="icon-button" aria-label={dark?'Passer en mode clair':'Passer en mode sombre'} onClick={theme}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button>
-        <button className="icon-button" aria-label={`Notifications (${data.unread} non lues)`} onClick={()=>go('notifications')}><Bell size={18}/>{data.unread?<span className="dot"/>:null}</button>
-        <button className="icon-button mobile-only" aria-label="Se déconnecter" onClick={async()=>{await authClient.signOut();window.location.assign('/login');}}><LogOut size={18}/></button></div></header>
-    <div className="content">
-      {error?<p className="error" role="alert">{error}</p>:null}{success?<p className="success toast" role="status">{success}</p>:null}
-      {admin&&!pushConfigured?<p className="warning"><TriangleAlert size={16}/> Les notifications push ne sont pas encore configurées sur le serveur (clés VAPID manquantes). Voir Administration → Envois.</p>:null}
-      {waiting?<section className="panel empty"><h2>Votre compte est prêt</h2><p>Notre équipe doit encore vous associer à votre organisation. Vous recevrez une notification dès que votre espace sera ouvert.</p></section>:null}
-      {!waiting&&current.id==='overview'?<Overview {...props}/>:null}
-      {current.id==='tickets'?<TicketsView {...props} selected={ticket} email={email}/>:null}
-      {current.id==='billing'?<BillingView {...props}/>:null}
-      {current.id==='usage'?<UsageView {...props}/>:null}
-      {current.id==='mail'?<MailWorkspace workspace={data}/>:null}
-      {current.id==='ledger'?<LedgerView {...props}/>:null}
-      {current.id==='clients'?<ClientsView {...props}/>:null}
-      {current.id==='admin'?<AdminView {...props}/>:null}
-      {current.id==='notifications'?<NotificationsView {...props}/>:null}
-      {current.id==='security'?<SecurityView email={email} pushConfigured={pushConfigured}/>:null}
+  const available=data.organizations.reduce((sum,o)=>sum+o.balance-o.reserved,0),reserved=data.organizations.reduce((sum,o)=>sum+o.reserved,0);
+  const open=data.tickets.filter(t=>!['closed','cancelled'].includes(t.status));
+  const tickets=data.tickets.filter(t=>(t.title+' '+t.number+' '+statuses[t.status]).toLowerCase().includes(filter.toLowerCase()));
+  const ticket=data.tickets.find(t=>t.id===selected);
+  const title=nav.find(n=>n.id===tab)?.label??'Votre espace';
+  function organization(id:string){return data?.organizations.find(o=>o.id===id)?.name??'';}
+  function ticketCard(t:Ticket){return <button className="ticket-row" key={t.id} onClick={()=>{setSelected(t.id);setTab('tickets');}}><div><span className="small muted">#{String(t.number).padStart(4,'0')} · {organization(t.organization_id)}</span><strong>{t.title}</strong><span className="small muted">{data?.applications.find(a=>a.id===t.application_id)?.name}</span></div><span className={'badge status-'+t.status}>{statuses[t.status]}</span><span className="token-amount">{t.estimated_tokens===null?'À estimer':t.estimated_tokens+' crédits'}</span><ArrowUpRight size={18}/></button>;}
+  return <div className="shell"><aside className="sidebar"><div className="brand"><span className="brand-icon">S</span>SupportFlow</div><div className="workspace-label">{staff?'ESPACE ÉQUIPE':'ESPACE CLIENT'}</div><nav aria-label="Navigation principale">{nav.filter(n=>staff||!['clients','plans'].includes(n.id)).map(n=><button key={n.id} className={tab===n.id?'nav-active':''} onClick={()=>{setTab(n.id);setSelected(null);}}><n.icon size={19}/>{n.label}</button>)}</nav><div className="sidebar-bottom"><div className="avatar">{data.actor.name.slice(0,1)}</div><div><strong>{data.actor.name}</strong><span>{data.actor.role}</span></div><button title="Se déconnecter" aria-label="Se déconnecter" onClick={async()=>{await authClient.signOut();window.location.assign('/login');}}><LogOut size={17}/></button></div></aside>
+    <main className="main"><header className="topbar"><span>Workspace <span className="muted">/ {title}</span></span><div className="actions"><span className="live-dot"/>Connecté<button aria-label={dark?'Mode clair':'Mode sombre'} onClick={()=>{localStorage.setItem('supportflow:theme:v1',dark?'light':'dark');setDark(!dark);}}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><button aria-label="Ouvrir les notifications" onClick={()=>setTab('notifications')}><Bell size={18}/></button></div></header>
+    <div className="content"><div className="page-heading"><div><p className="eyebrow">UN ESPACE, TOUS VOS PROJETS</p><h1>{title}</h1><p className="muted">{staff?'Pilotez les demandes et gardez une vision claire de chaque client.':'Faites évoluer vos applications, en toute visibilité.'}</p></div>{data.applications.length?<button className="primary" onClick={()=>{setTab('tickets');setNewTicket(true);setSelected(null);}}><Plus size={17}/>Nouvelle demande</button>:null}</div>
+    {error?<p className="error" role="alert">{error}</p>:null}{success?<p className="success" role="status">{success}</p>:null}
+    {!staff&&!data.organizations.length?<section className="panel empty"><h2>Votre compte est prêt</h2><p>L’admin doit vous associer à votre organisation pour ouvrir l’accès à vos applications.</p></section>:null}
+    {tab==='mail'?<MailWorkspace workspace={data}/>:null}
+    {tab==='overview'?<>
+      <div className="stats"><article className="stat"><span>Crédits disponibles</span><strong>{available}</strong><small>Prêts pour vos prochaines évolutions</small></article><article className="stat"><span>Crédits réservés</span><strong>{reserved}</strong><small>Demandes acceptées, en attente de clôture</small></article><article className="stat"><span>Demandes ouvertes</span><strong>{open.length}</strong><small>{open.filter(t=>t.status==='quoted').length} estimations à valider</small></article><article className="stat"><span>{staff?'Clients':'Applications'}</span><strong>{staff?data.organizations.length:data.applications.length}</strong><small>Votre portefeuille actif</small></article></div>
+      <div className="overview-grid"><section className="panel"><div className="section-title"><h2>Les dernières demandes</h2><button className="text-button" onClick={()=>setTab('tickets')}>Tout voir →</button></div>{data.tickets.slice(0,5).map(ticketCard)}{!data.tickets.length?<div className="empty"><Tickets size={32}/><h3>Votre première demande commence ici</h3><p>Associez une application et une formule, puis créez un ticket.</p></div>:null}</section><section className="panel"><h2>Formules & crédits</h2>{data.organizations.map(o=><article className="subscription" key={o.id}><div className="section-title"><strong>{o.name}</strong><span className="badge">{o.snapshot?.name??'À attribuer'}</span></div><p className="credit-big">{o.balance-o.reserved}<span> crédits disponibles</span></p><div className="progress"><span style={{width:(o.balance?Math.max(0,Math.min(100,(o.balance-o.reserved)/o.balance*100)):0)+'%'}}/></div><p className="small muted">{o.reserved} réservés · {o.snapshot?.support_level??'Support à définir'}</p>{o.ends_at?<p className="small muted">Échéance : {new Date(o.ends_at).toLocaleDateString('fr-TN')}</p>:null}</article>)}{!data.organizations.length?<p className="muted">Ajoutez votre premier client dans Clients & applications.</p>:null}</section></div>
+      <section className="panel"><h2>Vos applications</h2><div className="application-grid">{data.applications.map(a=><article className="application" key={a.id}><Layers size={24}/><strong>{a.name}</strong><span className="small muted">{a.kind} · {organization(a.organization_id)}</span></article>)}</div>{!data.applications.length?<p className="muted">Aucune application associée pour le moment.</p>:null}</section>
+    </>:null}
+    {tab==='tickets'?<>
+      {newTicket?<section className="panel"><div className="section-title"><h2>Nouvelle demande</h2><button onClick={()=>setNewTicket(false)}>Fermer</button></div><ActionForm label="Envoyer la demande" onSubmit={async f=>{const ok=await action({type:'create_ticket',application_id:f.get('application_id'),title:f.get('title'),description:f.get('description'),category:f.get('category')});if(ok)setNewTicket(false);return ok;}}><div className="form-grid"><Field label="Application"><select name="application_id" required>{data.applications.map(a=><option key={a.id} value={a.id}>{a.name} · {organization(a.organization_id)}</option>)}</select></Field><Field label="Type de demande"><select name="category"><option value="design">Design</option><option value="development">Développement</option><option value="bug">Correction de bug</option></select></Field></div><Field label="Titre"><input name="title" required minLength={3} maxLength={160}/></Field><Field label="Décrivez le résultat attendu"><textarea name="description" required minLength={10} maxLength={10000} rows={4}/></Field><p className="small muted">Aucun crédit n’est réservé avant votre acceptation de l’estimation.</p></ActionForm></section>:null}
+      <section className="panel"><div className="section-title"><h2>Toutes les demandes</h2><input aria-label="Rechercher un ticket" placeholder="Rechercher un titre, un numéro…" value={filter} onChange={e=>setFilter(e.target.value)}/></div>{tickets.map(ticketCard)}{!tickets.length?<p className="empty">Aucune demande trouvée.</p>:null}</section>
+      {ticket?<section className="panel ticket-detail"><div className="section-title"><div><p className="eyebrow">DEMANDE #{ticket.number}</p><h2>{ticket.title}</h2></div><button onClick={()=>setSelected(null)}>Fermer</button></div><p className="preserve">{ticket.description}</p><div className="actions"><span className="badge">{statuses[ticket.status]}</span><span>{ticket.estimated_tokens??'—'} crédits · estimation v{ticket.estimate_revision}</span></div>{ticket.estimate_note?<p className="quote-note">{ticket.estimate_note}</p>:null}
+        {staff&&['new','quoted'].includes(ticket.status)?<ActionForm label="Envoyer l’estimation au client" onSubmit={f=>action({type:'quote',ticket_id:ticket.id,tokens:Number(f.get('tokens')),note:f.get('note')})}><div className="form-grid"><Field label="Coût en crédits"><input name="tokens" type="number" min={0} max={1000000} required defaultValue={ticket.estimated_tokens??suggestedCost(data.organizations.find(o=>o.id===ticket.organization_id)?.snapshot?.rules??[],ticket.category)??0}/></Field><Field label="Périmètre et délai proposés"><input name="note" required minLength={3} maxLength={2000}/></Field></div></ActionForm>:null}
+        <div className="actions spaced">
+          {!staff&&ticket.status==='quoted'?<button className="primary" disabled={pending} onClick={()=>action({type:'accept',ticket_id:ticket.id,estimate_revision:ticket.estimate_revision})}>Accepter et réserver {ticket.estimated_tokens} crédits</button>:null}
+          {staff&&ticket.status==='accepted'?<button disabled={pending} onClick={()=>action({type:'move',ticket_id:ticket.id,status:'in_progress'})}>Démarrer la réalisation</button>:null}
+          {staff&&ticket.status==='in_progress'?<button disabled={pending} onClick={()=>action({type:'move',ticket_id:ticket.id,status:'ready'})}>Marquer prêt à tester</button>:null}
+          {ticket.status==='ready'?<button className="primary" disabled={pending} onClick={()=>action({type:'move',ticket_id:ticket.id,status:'closed'})}>Valider la livraison et clôturer</button>:null}
+          {staff&&ticket.status==='ready'?<button disabled={pending} onClick={()=>action({type:'move',ticket_id:ticket.id,status:'in_progress'})}>Reprendre la réalisation</button>:null}
+          {(staff&&!['closed','cancelled'].includes(ticket.status)||!staff&&['new','quoted'].includes(ticket.status))?<button disabled={pending} onClick={()=>action({type:'move',ticket_id:ticket.id,status:'cancelled'})}>Annuler le ticket</button>:null}
+        </div><h3>Discussion</h3>{data.comments.filter(c=>c.ticket_id===ticket.id).reverse().map(c=><article className="comment" key={c.id}><strong>{c.author_name??'Équipe'}</strong><p className="preserve">{c.body}</p></article>)}<ActionForm label="Ajouter un commentaire" onSubmit={f=>action({type:'comment',ticket_id:ticket.id,body:f.get('body')})}><Field label="Votre message"><textarea name="body" rows={2} required maxLength={5000}/></Field></ActionForm>
+      </section>:null}
+    </>:null}
+    {tab==='plans'&&staff?<>
+      {admin?<button className="primary spaced" onClick={()=>setPlanEditor('new')}><Plus size={17}/>Créer une formule</button>:null}
+      {planEditor?<section className="panel"><PlanEditor key={typeof planEditor==='string'?'new':planEditor.id} plan={typeof planEditor==='string'?undefined:planEditor} onSave={action} onCancel={()=>setPlanEditor(null)}/></section>:null}
+      <div className="application-grid">{data.plans.map(p=><section className="panel plan" key={p.id}><span className="eyebrow">FORMULE · VERSION {p.revision}</span><h2>{p.name}</h2><p className="credit-big">{p.annual_tokens}<span> crédits / an</span></p><p>{new Intl.NumberFormat('fr-TN',{style:'currency',currency:p.currency}).format(p.price_minor/(p.currency==='TND'?1000:100))} / an</p><p className="muted">{p.support_level}</p><p className="small">{p.rules.length} règles configurées</p>{admin?<button onClick={()=>setPlanEditor(p)}>Modifier la formule</button>:null}</section>)}</div>{!data.plans.length?<p className="empty">Créez une formule pour attribuer un quota annuel à vos clients.</p>:null}
+    </>:null}
+    {tab==='clients'&&staff?<>
+      {admin?<section className="panel"><h2>Ajouter un client</h2><ActionForm label="Associer le compte client" onSubmit={f=>action({type:'create_organization',name:f.get('name'),email:f.get('email')})}><div className="form-grid"><Field label="Nom de l’organisation"><input name="name" required minLength={2}/></Field><Field label="E-mail du compte déjà créé"><input name="email" type="email" required/></Field></div></ActionForm></section>:null}
+      {data.organizations.map(o=><section className="panel" key={o.id}><div className="section-title"><h2>{o.name}</h2><span className="badge">{o.snapshot?.name??'Sans formule'}</span></div><p className="muted">{o.balance-o.reserved} disponibles · {o.reserved} réservés</p><div className="form-grid">{admin?<div><h3>Attribuer une formule</h3><ActionForm label="Appliquer la formule" onSubmit={f=>action({type:'assign_plan',organization_id:o.id,plan_id:f.get('plan_id')})}><Field label="Formule"><select name="plan_id" required defaultValue={o.snapshot?.id}>{data.plans.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><p className="small muted">Le quota est crédité lors de la première attribution. Changer de formule ne recharge pas le solde.</p></ActionForm></div>:null}<div><h3>Ajouter une application</h3><ActionForm label="Ajouter" onSubmit={f=>action({type:'create_application',organization_id:o.id,name:f.get('name'),kind:f.get('kind')})}><Field label="Nom"><input name="name" required minLength={2}/></Field><Field label="Type"><select name="kind"><option value="web">Web</option><option value="mobile">Mobile</option><option value="software">Logiciel</option></select></Field></ActionForm></div>{admin?<div><h3>Recharge de crédits</h3><ActionForm label="Créditer le portefeuille" onSubmit={f=>action({type:'recharge',organization_id:o.id,tokens:Number(f.get('tokens')),note:f.get('note')})}><Field label="Nombre de crédits"><input name="tokens" type="number" min={1} max={1000000} required/></Field><Field label="Motif ou référence du paiement"><input name="note" required minLength={3}/></Field><p className="small muted">Cette action enregistre un crédit manuel ; elle n’encaisse aucun paiement.</p></ActionForm></div>:null}</div></section>)}
+    </>:null}
+    {tab==='ledger'?<section className="panel"><h2>Mouvements de crédits</h2><div className="table-wrap"><table><thead><tr><th>Date</th><th>Opération</th><th>Solde</th><th>Réservés</th><th>Motif</th></tr></thead><tbody>{data.ledger.map(l=><tr key={l.id}><td>{new Date(l.created_at).toLocaleDateString('fr-TN')}</td><td>{({annual_allocation:'Quota annuel',manual_recharge:'Recharge',reserve:'Réservation',consume:'Consommation',release:'Libération'} as Record<string,string>)[l.kind]??l.kind}</td><td>{l.balance_delta>0?'+':''}{l.balance_delta}</td><td>{l.reserved_delta>0?'+':''}{l.reserved_delta}</td><td>{l.note}</td></tr>)}</tbody></table></div>{!data.ledger.length?<p className="empty">Aucun mouvement enregistré.</p>:null}</section>:null}
+    {tab==='notifications'?<section className="panel"><h2>Activité de votre espace</h2>{data.notifications.map(n=><article className="notification" key={n.id}><Bell size={18}/><div><p>{n.message}</p><span className="small muted">{new Date(n.created_at).toLocaleString('fr-TN')}</span></div></article>)}{!data.notifications.length?<p className="empty">Vous êtes à jour.</p>:null}</section>:null}
     </div></main></div>;
 }

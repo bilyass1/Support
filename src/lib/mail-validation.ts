@@ -23,8 +23,7 @@ export const mailActionSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('mailbox_operation'), mailbox_id: id,
     operation: z.enum(['suspend', 'resume', 'reset_password']), password: password.optional()}),
   z.object({type: z.literal('resolve_operation'), mailbox_id: id, completed: z.boolean(),
-    verified: z.literal(true), note: z.string().trim().min(10).max(1000)}),
-  z.object({type: z.literal('sync_usage')})
+    verified: z.literal(true), note: z.string().trim().min(10).max(1000)})
 ]);
 export type MailAction = z.infer<typeof mailActionSchema>;
 export type MailDomain = {
@@ -39,6 +38,5 @@ export type Mailbox = {
   operation: 'create' | 'suspend' | 'resume' | 'reset_password' | null;
   operation_state: 'pending' | 'processing' | 'failed' | null;
   operation_started_at: string | null;
-  used_mb: number | null; messages: number | null; last_login_at: string | null; usage_synced_at: string | null;
 };
 export type MailWorkspace = {domains: MailDomain[]; mailboxes: Mailbox[]; automatic_available: boolean; page: number; total_mailboxes: number};
