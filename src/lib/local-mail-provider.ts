@@ -7,6 +7,10 @@ export function localMailAvailable() {
 }
 
 export function localMailRequest(body: Record<string, unknown>): Promise<void> {
+  return localMailCall(body).then(() => undefined);
+}
+
+function localMailCall(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (!localMailAvailable()) throw new DomainError('Connecteur Postfix/Dovecot non configuré.', 503);
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -21,8 +25,9 @@ export function localMailRequest(body: Record<string, unknown>): Promise<void> {
       res.on('error', reject);
       res.on('end', () => {
         try {
-          if (res.statusCode !== 200 || JSON.parse(response).ok !== true) throw new Error('LocalMailRejected');
-          resolve();
+          const answer = JSON.parse(response);
+          if (res.statusCode !== 200 || !answer || answer.ok !== true) throw new Error('LocalMailRejected');
+          resolve(answer);
         } catch { reject(new Error('LocalMailRejected')); }
       });
     });
@@ -38,4 +43,15 @@ export async function provisionLocalMailbox(domain: MailDomain, mailbox: Mailbox
   }
   await localMailRequest({operation: mailbox.operation, domain: domain.domain, local_part: mailbox.local_part,
     mailbox_id: mailbox.id, password});
+}
+
+/** Real size of a managed mailbox, read by the broker from its Maildir. Null when the broker predates this operation or refuses. */
+export async function localMailboxUsage(domain: MailDomain, mailbox: Mailbox) {
+  try {
+    const answer = await localMailCall({operation: 'usage', domain: domain.domain, local_part: mailbox.local_part, mailbox_id: mailbox.id});
+    const bytes = Number(answer.used_bytes), messages = Number(answer.messages), last = Number(answer.last_activity);
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(messages) || messages < 0) return null;
+    return {used_mb: Math.min(2_000_000_000, Math.ceil(bytes / 1_048_576)), messages: Math.min(2_000_000_000, messages),
+      last_activity_at: Number.isFinite(last) && last > 0 ? new Date(last * 1000).toISOString() : null};
+  } catch { return null; }
 }

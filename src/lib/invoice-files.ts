@@ -5,7 +5,7 @@ import {resolve,join} from 'node:path';
 import {z} from 'zod';
 import {transaction,pool} from './db';
 import {DomainError} from './domain';
-import type {Actor} from './service';
+import {moduleOn,type Actor} from './service';
 export const MAX_PDF=10*1024*1024;
 export function validatePdf(bytes:Buffer){if(!bytes.length||bytes.length>MAX_PDF)throw new DomainError('Le PDF doit faire au maximum 10 Mo.',400);if(!bytes.subarray(0,8).toString('ascii').startsWith('%PDF-')||!bytes.subarray(-2048).includes(Buffer.from('%%EOF')))throw new DomainError('Le fichier doit être un PDF valide.',400);}
 function directory(){return resolve(process.env.INVOICE_STORAGE_DIR??'/opt/supportflow/private-invoices');}
@@ -27,6 +27,7 @@ export async function downloadInvoice(actor:Actor,invoiceId:string){
  if(!z.uuid().safeParse(invoiceId).success)throw new DomainError('Document introuvable.',404);
  const item=(await pool.query('SELECT f.*,i.organization_id,i.number FROM invoice_files f JOIN invoices i ON i.id=f.invoice_id WHERE i.id=$1',[invoiceId])).rows[0];
  if(!item||(actor.role!=='admin'&&actor.organization_id!==item.organization_id))throw new DomainError('Document introuvable.',404);
+ await moduleOn(pool,actor,item.organization_id,'billing');
  if(!/^[0-9a-f-]{36}\.pdf$/.test(item.storage_key))throw new DomainError('Document indisponible.',500);
  const handle=await open(join(directory(),item.storage_key),constants.O_RDONLY|constants.O_NOFOLLOW);let bytes:Buffer;try{const stat=await handle.stat();if(!stat.isFile()||stat.size>MAX_PDF||stat.size!==item.size_bytes)throw new DomainError('Document indisponible.',500);bytes=await handle.readFile();}finally{await handle.close();}
  if(createHash('sha256').update(bytes).digest('hex')!==item.sha256)throw new DomainError('Document indisponible.',500);

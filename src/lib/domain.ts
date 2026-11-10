@@ -26,3 +26,7 @@ export function checkOpenLimit(rules:Rule[], count:number) {
   const limits=rules.filter((rule):rule is Extract<Rule,{kind:'max_open_tickets'}>=>rule.kind==='max_open_tickets');
   if (limits.some(rule=>count>=rule.limit)) throw new DomainError('La limite de tickets ouverts de cette formule est atteinte.',409);
 }
+export const MODULES=['tokens','billing','support','tickets','mail','usage'] as const;
+export type Module=typeof MODULES[number];
+export const moduleLabels:Record<Module,string>={tokens:'Tokens & achats',billing:'Factures',support:'Support',tickets:'Demandes de développement',mail:'Messagerie & Outlook',usage:'Applications & utilisation'};
+export const statusLabels:Record<TicketStatus,string>={new:'Nouveau',quoted:'À valider',accepted:'Accepté',in_progress:'En cours',ready:'À tester',closed:'Clôturé',cancelled:'Annulé'};

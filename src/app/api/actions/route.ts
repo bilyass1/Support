@@ -2,6 +2,7 @@ import { authenticated,sameOrigin,failure } from '@/lib/request';
 import { actionSchema } from '@/lib/validation';
 import { act } from '@/lib/service';
 import { DomainError } from '@/lib/domain';
+import { deliverAfterResponse } from '@/lib/deliver-now';
 export const runtime='nodejs';
 export async function POST(request:Request) {
   try {
@@ -13,6 +14,6 @@ export async function POST(request:Request) {
     try { parsed=JSON.parse(raw); } catch { throw new DomainError('JSON invalide.'); }
     const input=actionSchema.safeParse(parsed);
     if(!input.success) throw new DomainError('Champs invalides : '+input.error.issues.map(i=>i.path.join('.')).join(', '));
-    return Response.json(await act(actor,input.data));
+    const result=await act(actor,input.data);deliverAfterResponse();return Response.json(result);
   } catch(error) { return failure(error); }
 }

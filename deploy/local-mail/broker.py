@@ -147,11 +147,54 @@ def add_alias(address, username, mailbox_id):
             if os.path.exists(name):
                 os.unlink(name)
 
+MAX_USAGE_ENTRIES = 500000
+
+def usage(body):
+    # Read-only. Only a mailbox with an active root-written state record is measured, and only inside
+    # the home that record names. Nothing is followed outside it: symlinks are counted as nothing.
+    domain, local, username, mailbox_id = identity(body)
+    state_path = STATE / (mailbox_id + '.json')
+    secure_file(state_path)
+    record = json.loads(state_path.read_text())
+    if not isinstance(record, dict) or record.get('phase') != 'active' or record.get('domain') != domain \
+            or record.get('local_part') != local or record.get('username') != username:
+        raise Rejected('unmanaged mailbox')
+    account = pwd.getpwnam(username)
+    home = Path(record['home']) if isinstance(record.get('home'), str) else HOME_ROOT / username
+    if account.pw_uid != record.get('uid') or account.pw_dir != str(home) or home.parent != HOME_ROOT:
+        raise Rejected('mailbox identity changed')
+    root = home / 'Maildir'
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != account.pw_uid:
+        raise Rejected('unsafe mailbox')
+    used = messages = seen = 0
+    latest = 0.0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        in_messages = directory.name in ('cur', 'new')
+        with os.scandir(directory) as listing:
+            for entry in listing:
+                seen += 1
+                if seen > MAX_USAGE_ENTRIES:
+                    raise Rejected('mailbox too large to measure')
+                item = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(item.st_mode):
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(item.st_mode):
+                    used += item.st_size
+                    if in_messages:
+                        messages += 1
+                        latest = max(latest, item.st_mtime)
+    return {'used_bytes': used, 'messages': messages, 'last_activity': int(latest)}
+
 def provision(body):
     operation = body.get('operation')
     if operation == 'verify_domain':
         verify_domain(body.get('domain'))
         return
+    if operation == 'usage':
+        return usage(body)
     if operation not in ('create', 'reset_password'):
         raise Rejected('unsupported operation')
     domain, local, username, mailbox_id = identity(body)
@@ -222,8 +265,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
                 raise Rejected('invalid request')
-            provision(body)
-            status, result = 200, {'ok': True}
+            answer = provision(body)
+            status, result = 200, {**(answer if isinstance(answer, dict) else {}), 'ok': True}
         except Exception:
             # Generic errors keep secrets and system details out of the application.
             pass

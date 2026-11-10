@@ -1,7 +1,8 @@
 import type { PoolClient } from 'pg';
 import { pool, transaction } from './db';
 import { DomainError } from './domain';
-import { credits, type Actor } from './service';
+import { credits, moduleOn, type Actor } from './service';
+import { localMailAvailable, localMailboxUsage } from './local-mail-provider';
 import type { MailAction, MailDomain, Mailbox } from './mail-validation';
 import { mailProviderAvailable, provisionMailbox, verifyMailDomain } from './mail-provider';
 
@@ -34,8 +35,31 @@ async function complete(c: PoolClient, actor: Actor, domain: MailDomain, mailbox
     [domain.organization_id, `Messagerie : opération terminée pour ${mailbox.local_part}@${domain.domain}.`]);
 }
 
+/**
+ * Reads the real size of each active Postfix/Dovecot mailbox from the broker. Other providers have no
+ * measurement source here, so their mailboxes keep showing reserved quotas only.
+ */
+export async function syncMailUsage(actor: Actor) {
+  admin(actor);
+  if (!localMailAvailable()) return {message: 'Le connecteur Postfix/Dovecot n’est pas configuré : l’utilisation réelle ne peut pas être relevée.', measured: 0, total: 0};
+  const rows = (await pool.query(`SELECT b.*,d.domain,d.organization_id,d.provider FROM email_mailboxes b JOIN email_domains d ON d.id=b.domain_id
+    WHERE d.provider='postfix' AND b.status='active' ORDER BY b.usage_synced_at NULLS FIRST LIMIT 200`)).rows;
+  let measured = 0;
+  for (const row of rows) {
+    const usage = await localMailboxUsage(row as MailDomain, row as Mailbox);
+    if (!usage) continue;
+    await pool.query('UPDATE email_mailboxes SET used_mb=$2,messages=$3,last_activity_at=$4,usage_synced_at=now() WHERE id=$1',
+      [row.id, usage.used_mb, usage.messages, usage.last_activity_at]);
+    measured++;
+  }
+  return {measured, total: rows.length, message: !rows.length ? 'Aucune boîte Postfix active à relever.' : measured
+    ? `Utilisation relevée pour ${measured} boîte(s) sur ${rows.length}.`
+    : 'Le serveur de messagerie n’a renvoyé aucune mesure. Mettez à jour le broker (deploy/local-mail/README.md) pour activer le relevé.'};
+}
+
 export async function mailWorkspace(actor: Actor, page = 0) {
   const scoped = actor.role === 'client';
+  if (scoped) await moduleOn(pool, actor, actor.organization_id, 'mail');
   const where = scoped ? ' WHERE d.organization_id=$1' : '';
   const args = scoped ? [actor.organization_id] : [];
   const offsetParameter = scoped ? '$2' : '$1';
@@ -62,6 +86,7 @@ export async function mailAct(actor: Actor, input: MailAction) {
   }
 }
 async function perform(actor: Actor, input: MailAction) {
+  if (input.type === 'sync_usage') return syncMailUsage(actor);
   if (input.type === 'save_domain') {
     admin(actor);
     return transaction(async c => {
@@ -136,6 +161,7 @@ async function perform(actor: Actor, input: MailAction) {
       domain = (await c.query('SELECT * FROM email_domains WHERE id=$1', [mailbox!.domain_id])).rows[0];
     }
     access(actor, domain.organization_id);
+    await moduleOn(c, actor, domain.organization_id, 'mail');
     if (!domain.enabled) throw new DomainError('Ce domaine est en attente de configuration par l’administrateur.', 409);
     if (domain.provider !== 'manual' && !mailProviderAvailable(domain.provider)) throw new DomainError('Connecteur de messagerie indisponible.', 503);
     const operation = input.type === 'create_mailbox' ? 'create' : input.operation;

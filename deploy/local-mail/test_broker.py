@@ -162,5 +162,65 @@ class BrokerTests(unittest.TestCase):
             with patch.object(broker,'HOME_ROOT',home),patch.object(Path,'lstat',lstat):
                 with self.assertRaises(broker.Rejected):broker.reviewed_layout(account,'contact-imf-immobiliere.tn',home/'unsafe','contact-imf-immobiliere.tn@localhost')
 
+class UsageTests(unittest.TestCase):
+    def setUp(self):
+        self.mailbox_id = str(uuid.uuid4())
+        self.body = {'operation': 'usage', 'domain': 'cimeevents.com', 'local_part': 'contact', 'mailbox_id': self.mailbox_id}
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        base = Path(self.temporary.name)
+        self.state, self.homes = base / 'state', base / 'home'
+        self.home = self.homes / 'contact-cimeevents.com'
+        for directory in ('Maildir/cur', 'Maildir/new', 'Maildir/tmp', 'Maildir/Sent/cur'):
+            (self.home / directory).mkdir(parents=True)
+        self.state.mkdir()
+        (self.home / 'Maildir/cur/1').write_bytes(b'a' * 1000)
+        (self.home / 'Maildir/new/2').write_bytes(b'b' * 500)
+        (self.home / 'Maildir/Sent/cur/3').write_bytes(b'c' * 250)
+        (self.home / 'Maildir/dovecot.index').write_bytes(b'i' * 40)
+        self.uid = self.home.stat().st_uid
+        self.record = {'domain': 'cimeevents.com', 'local_part': 'contact', 'username': 'contact-cimeevents.com', 'uid': self.uid, 'phase': 'active'}
+        (self.state / (self.mailbox_id + '.json')).write_text(json.dumps(self.record))
+        account = SimpleNamespace(pw_uid=self.uid, pw_dir=str(self.home), pw_shell='/sbin/nologin')
+        for target, value in (('settings', {'domains': ['cimeevents.com'], 'max_accounts': 20}),):
+            patcher = patch.object(broker, target, return_value=value); patcher.start(); self.addCleanup(patcher.stop)
+        for patcher in (patch.object(broker, 'STATE', self.state), patch.object(broker, 'HOME_ROOT', self.homes),
+                        patch.object(broker, 'secure_file'), patch.object(broker.pwd, 'getpwnam', return_value=account),
+                        patch.object(broker, 'command')):
+            mock = patcher.start(); self.addCleanup(patcher.stop)
+            if patcher.attribute == 'command':
+                self.command = mock
+
+    def test_measures_messages_and_storage_without_running_any_command(self):
+        result = broker.provision(self.body)
+        self.assertEqual(result['used_bytes'], 1790)
+        self.assertEqual(result['messages'], 3)
+        self.assertGreater(result['last_activity'], 0)
+        self.command.assert_not_called()
+
+    def test_never_follows_links_out_of_the_mailbox(self):
+        outside = Path(self.temporary.name) / 'outside'
+        outside.mkdir()
+        (outside / 'secret').write_bytes(b'x' * 100000)
+        os_symlink = __import__('os').symlink
+        os_symlink(outside, self.home / 'Maildir/linked')
+        os_symlink(outside / 'secret', self.home / 'Maildir/cur/4')
+        self.assertEqual(broker.provision(self.body)['used_bytes'], 1790)
+        self.assertEqual(broker.provision(self.body)['messages'], 3)
+
+    def test_refuses_unmanaged_or_changed_mailboxes(self):
+        path = self.state / (self.mailbox_id + '.json')
+        for record in ({**self.record, 'phase': 'creating'}, {**self.record, 'local_part': 'other'},
+                       {**self.record, 'uid': self.uid + 1}, {**self.record, 'home': '/etc'}, []):
+            path.write_text(json.dumps(record))
+            with self.subTest(record=record), self.assertRaises(broker.Rejected):
+                broker.provision(self.body)
+        with self.assertRaises(broker.Rejected):
+            broker.provision({**self.body, 'domain': 'solumove.net'})
+
+    def test_refuses_mailboxes_too_large_to_walk(self):
+        with patch.object(broker, 'MAX_USAGE_ENTRIES', 3), self.assertRaises(broker.Rejected):
+            broker.provision(self.body)
+
 if __name__ == '__main__':
     unittest.main()

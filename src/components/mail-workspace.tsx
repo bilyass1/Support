@@ -1,4 +1,5 @@
 'use client';
+import { Meter, ago, megabytes } from './client-insights';
 import { useCallback, useEffect, useState } from 'react';
 import type { Workspace } from '@/lib/types';
 import type { MailDomain, MailWorkspace as MailData, Mailbox } from '@/lib/mail-validation';
@@ -145,6 +146,7 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
     {message ? <p className="success" role="status">{message}</p> : null}
     <section className="panel"><div className="section-title"><div><h2>Vos domaines & boîtes mail</h2><p className="muted">Créez des adresses professionnelles et retrouvez leurs paramètres Outlook.</p></div>
       <div className="actions"><button onClick={() => load().catch(error => setError(error.message))}>Actualiser</button>
+      {admin ? <button onClick={() => action({type: 'sync_usage'})}>Relever l’utilisation réelle</button> : null}
       {admin ? <button className="primary" disabled={!workspace.organizations.length} onClick={() => setEditor('new')}>Ajouter un domaine</button> : null}</div>
     </div>
       <p className="small muted">Le domaine est saisi et attribué au client par l’admin. Les opérations en attente ne sont pas encore appliquées au serveur mail.</p>
@@ -183,7 +185,8 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
       {data.mailboxes.map(mailbox => {
         const domain = data.domains.find(domain => domain.id === mailbox.domain_id);
         if (!domain) return null;
-        return <article className="mailbox-card" key={mailbox.id}><div className="section-title"><div><strong className="mail-address">{mailbox.local_part}@{domain.domain}</strong><p className="small muted">{mailbox.display_name} · quota {space(mailbox.quota_mb)}</p></div><span className="badge">{statusLabels[mailbox.status]}</span></div>
+        return <article className="mailbox-card" key={mailbox.id}><div className="section-title"><div><strong className="mail-address">{mailbox.local_part}@{domain.domain}</strong><p className="small muted">{mailbox.display_name} · quota {space(mailbox.quota_mb)}</p>
+            {mailbox.usage_synced_at ? <><Meter value={mailbox.used_mb ?? 0} max={mailbox.quota_mb} label="Stockage utilisé"/><p className="small muted">{megabytes(mailbox.used_mb ?? 0)} utilisés · {mailbox.messages ?? 0} messages · dernière activité {ago(mailbox.last_activity_at)}</p></> : null}</div><span className="badge">{statusLabels[mailbox.status]}</span></div>
           {canManage ? <MailboxActions domain={domain} mailbox={mailbox} admin={admin} automatic={data.automatic_available} onAction={action}/> : <OutlookSettings domain={domain} mailbox={mailbox}/>}
         </article>;
       })}

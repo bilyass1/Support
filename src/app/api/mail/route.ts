@@ -2,6 +2,7 @@ import { authenticated, failure, sameOrigin } from '@/lib/request';
 import { DomainError } from '@/lib/domain';
 import { mailWorkspace, mailAct } from '@/lib/mail-service';
 import { mailActionSchema } from '@/lib/mail-validation';
+import { deliverAfterResponse } from '@/lib/deliver-now';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -24,6 +25,6 @@ export async function POST(request: Request) {
     try { value = JSON.parse(raw); } catch { throw new DomainError('JSON invalide.'); }
     const input = mailActionSchema.safeParse(value);
     if (!input.success) throw new DomainError('Champs de messagerie invalides. Vérifiez les noms, quotas et mots de passe.');
-    return Response.json(await mailAct(actor, input.data));
+    const result = await mailAct(actor, input.data); deliverAfterResponse(); return Response.json(result);
   } catch (error) { return failure(error); }
 }

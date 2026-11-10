@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { transaction, pool } from './db';
-import { DomainError, creditChange, canMove, checkOpenLimit, type Role, type Rule } from './domain';
+import { DomainError, creditChange, canMove, checkOpenLimit, statusLabels, type Role, type Rule, type Module, type TicketStatus } from './domain';
 import type { Action } from './validation';
 
 export type Actor={id:string; name:string; role:Role; organization_id:string|null};
@@ -15,6 +15,13 @@ function staff(actor:Actor) { if(actor.role==='client') throw new DomainError('A
 function admin(actor:Actor) { if(actor.role!=='admin') throw new DomainError('Accès réservé à l’admin.',403); }
 function own(actor:Actor,organizationId:string) {
   if(actor.role==='client' && actor.organization_id!==organizationId) throw new DomainError('Accès refusé.',403);
+}
+/** A client only reaches the modules the admin enabled for its organization. Enforced on the server for every read and action. */
+export async function moduleOn(c:Pick<PoolClient,'query'>,actor:Actor,organizationId:string|null,module:Module) {
+  if(actor.role!=='client') return;
+  if(!organizationId || actor.organization_id!==organizationId) throw new DomainError('Accès refusé.',403);
+  const enabled=await c.query('SELECT 1 FROM organizations WHERE id=$1 AND $2=ANY(modules)',[organizationId,module]);
+  if(!enabled.rowCount) throw new DomainError('Ce module n’est pas activé pour votre espace.',403);
 }
 async function audit(c:PoolClient,actor:Actor,action:string,id:string,detail:unknown) {
   await c.query('INSERT INTO audit_events(actor_id,action,entity_id,detail) VALUES ($1,$2,$3,$4)',[actor.id,action,id,JSON.stringify(detail)]);
@@ -52,6 +59,7 @@ export async function act(actor:Actor,input:Action) {
     }
     if(input.type==='create_application') {
       admin(actor);
+      if(!(await c.query('SELECT 1 FROM organizations WHERE id=$1',[input.organization_id])).rowCount) throw new DomainError('Client introuvable.',404);
       const result=await c.query('INSERT INTO applications(organization_id,name,kind) VALUES ($1,$2,$3) RETURNING id',[input.organization_id,input.name,input.kind]);
       await audit(c,actor,input.type,result.rows[0].id,input);
       return result.rows[0];
@@ -109,6 +117,7 @@ export async function act(actor:Actor,input:Action) {
       if(!application.rowCount) throw new DomainError('Application introuvable.',404);
       const org=application.rows[0].organization_id;
       own(actor,org);
+      await moduleOn(c,actor,org,'tickets');
       await c.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[org]);
       const subscription=await activeSubscription(c,org);
       const count=await c.query("SELECT count(*)::int AS count FROM tickets WHERE organization_id=$1 AND status NOT IN ('closed','cancelled')",[org]);
@@ -121,6 +130,7 @@ export async function act(actor:Actor,input:Action) {
     if(!result.rowCount) throw new DomainError('Ticket introuvable.',404);
     const ticket=result.rows[0];
     own(actor,ticket.organization_id);
+    await moduleOn(c,actor,ticket.organization_id,'tickets');
     if(input.type==='quote') {
       staff(actor);
       if(!['new','quoted'].includes(ticket.status)) throw new DomainError('Ce ticket a déjà été validé.',409);
@@ -144,7 +154,7 @@ export async function act(actor:Actor,input:Action) {
         await credits(c,actor,ticket.organization_id,ticket.id,'release',0,-ticket.estimated_tokens,'Réservation libérée après annulation');
       }
       await c.query('UPDATE tickets SET status=$2,updated_at=now() WHERE id=$1',[ticket.id,input.status]);
-      await notify(c,ticket.organization_id,`Ticket #${ticket.number} : statut ${input.status}.`);
+      await notify(c,ticket.organization_id,`Ticket #${ticket.number} « ${ticket.title} » : ${statusLabels[input.status as TicketStatus].toLowerCase()}.`);
     } else if(input.type==='comment') {
       await c.query('INSERT INTO ticket_comments(ticket_id,author_id,body) VALUES ($1,$2,$3)',[ticket.id,actor.id,input.body]);
       await notify(c,ticket.organization_id,`Nouveau commentaire sur le ticket #${ticket.number}.`);
@@ -161,15 +171,22 @@ export async function workspace(actor:Actor) {
   const values=scoped?[org]:[];
   const organizationQuery=`SELECT o.*,(SELECT coalesce(json_agg(d.domain),'[]'::json) FROM email_domains d WHERE d.organization_id=o.id) AS domains,w.balance,w.reserved,s.snapshot,s.ends_at FROM organizations o JOIN wallets w ON w.organization_id=o.id LEFT JOIN subscriptions s ON s.organization_id=o.id${predicate} ORDER BY o.name`;
   const filter=scoped?' WHERE organization_id=$1':'';
-  const [organizations,applications,plans,tickets,ledger,notifications,comments]=await Promise.all([
-    pool.query(organizationQuery,values),
-    pool.query(`SELECT * FROM applications${filter} ORDER BY name`,values),
-    scoped?Promise.resolve({rows:[]}):pool.query('SELECT * FROM plans ORDER BY name'),
-    pool.query(`SELECT * FROM tickets${filter} ORDER BY created_at DESC LIMIT 100`,values),
-    pool.query(`SELECT * FROM credit_ledger${filter} ORDER BY created_at DESC LIMIT 100`,values),
+  const organizations=await pool.query(organizationQuery,values);
+  // Staff see everything; a client sees only what its organization has been granted.
+  const modules:string[]=scoped?organizations.rows[0]?.modules??[]:['tokens','billing','support','tickets','mail','usage'];
+  const has=(module:Module)=>modules.includes(module);
+  const none=Promise.resolve({rows:[] as Record<string,unknown>[]});
+  const [applications,plans,tickets,ledger,notifications,appUsage]=await Promise.all([
+    pool.query(`SELECT id,organization_id,name,kind,last_seen_at,last_version,(ingest_key_hash IS NOT NULL) AS tracked FROM applications${filter} ORDER BY name`,values),
+    scoped?none:pool.query('SELECT * FROM plans ORDER BY name'),
+    has('tickets')?pool.query(`SELECT * FROM tickets${filter} ORDER BY created_at DESC LIMIT 100`,values):none,
+    has('tokens')?pool.query(`SELECT * FROM credit_ledger${filter} ORDER BY created_at DESC LIMIT 100`,values):none,
     pool.query(`SELECT * FROM notifications${filter} ORDER BY created_at DESC LIMIT 30`,values),
-    pool.query(`SELECT c.*,u.name AS author_name FROM ticket_comments c JOIN tickets t ON t.id=c.ticket_id LEFT JOIN "user" u ON u.id=c.author_id${scoped?' WHERE t.organization_id=$1':''} ORDER BY c.created_at DESC LIMIT 200`,values)
+    has('usage')?pool.query(`SELECT d.application_id,d.day::text AS day,d.events,d.sessions,d.errors,(SELECT count(*)::int FROM app_usage_users u WHERE u.application_id=d.application_id AND u.day=d.day) AS users
+      FROM app_usage_daily d JOIN applications a ON a.id=d.application_id WHERE d.day>current_date-30${scoped?' AND a.organization_id=$1':''} ORDER BY d.day`,values):none
   ]);
-  return {actor,organizations:organizations.rows,applications:applications.rows,plans:plans.rows,tickets:tickets.rows,ledger:ledger.rows,notifications:notifications.rows,comments:comments.rows};
+  // Every comment of the listed tickets: a global cap used to empty the discussion of older tickets.
+  const ticketIds=tickets.rows.map(t=>t.id);
+  const comments=ticketIds.length?await pool.query('SELECT c.*,u.name AS author_name FROM ticket_comments c LEFT JOIN "user" u ON u.id=c.author_id WHERE c.ticket_id=ANY($1::uuid[]) ORDER BY c.created_at DESC',[ticketIds]):{rows:[]};
+  return {actor,modules,organizations:organizations.rows,applications:applications.rows,plans:plans.rows,tickets:tickets.rows,ledger:ledger.rows,notifications:notifications.rows,comments:comments.rows,app_usage:appUsage.rows};
 }
-

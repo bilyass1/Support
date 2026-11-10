@@ -25,7 +25,7 @@ const run = (actor: Actor, input: unknown) => mailAct(actor, mailActionSchema.pa
 const rows = async <T = Record<string, unknown>>(sql: string, args: unknown[] = []) => (await harness.db.query<T>(sql, args)).rows;
 beforeAll(async () => {
   harness.db = new PGlite();
-  for (const name of ['001_initial.sql', '002_email.sql', '003_local_mail.sql','004_platform.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
+  for (const name of ['001_initial.sql', '002_email.sql', '003_local_mail.sql','004_platform.sql','008_modules_usage.sql']) await harness.db.exec(await readFile(new URL('../db/' + name, import.meta.url), 'utf8'));
 });
 afterAll(async () => {await harness.db.close();});
 beforeEach(async () => {

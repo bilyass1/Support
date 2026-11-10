@@ -8,7 +8,9 @@ import { GET, POST, DELETE } from '../src/app/api/push/route';
 import { configuredPushKey } from '../src/lib/push-config.mjs';
 import { allowedPushEndpoint } from '../src/lib/push-endpoint.mjs';
 import { DomainError } from '../src/lib/domain';
-const curve = createECDH('prime256v1'); curve.generateKeys();
+const curve = createECDH('prime256v1');
+// One private key in 256 starts with a zero byte and is exported shorter; draw again so the fixture is always a valid pair.
+do { curve.generateKeys(); } while (curve.getPrivateKey().length !== 32);
 const origin = 'https://support.example';
 const body = {endpoint: 'https://wns2-test.notify.windows.com/w/?token=test', keys: {p256dh: 'p'.repeat(80), auth: 'a'.repeat(24)}};
 const post = (data: unknown = body, from = origin) => new Request(origin + '/api/push', {method: 'POST', headers: {Origin: from}, body: JSON.stringify(data)});
@@ -22,9 +24,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 describe('push configuration and tenant boundary', () => {
   it('exposes only a usable public key and refuses missing or mismatched key pairs', async () => {
-    expect(await (await GET(new Request(origin + '/api/push'))).json()).toEqual({publicKey: process.env.VAPID_PUBLIC_KEY});
+    expect(await (await GET(new Request(origin + '/api/push'))).json()).toEqual({publicKey: process.env.VAPID_PUBLIC_KEY, required: true});
     vi.stubEnv('VAPID_PRIVATE_KEY', ''); expect(configuredPushKey()).toBeNull();
-    expect(await (await GET(new Request(origin + '/api/push'))).json()).toEqual({publicKey: ''});
+    expect(await (await GET(new Request(origin + '/api/push'))).json()).toEqual({publicKey: '', required: true});
     expect((await POST(post())).status).toBe(503); expect(harness.query).not.toHaveBeenCalled();
     const other = createECDH('prime256v1'); other.generateKeys();
     vi.stubEnv('VAPID_PRIVATE_KEY', other.getPrivateKey().toString('base64url')); expect(configuredPushKey()).toBeNull();
