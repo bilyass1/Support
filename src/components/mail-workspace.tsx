@@ -186,7 +186,7 @@ export function MailWorkspace({workspace}: {workspace: Workspace}) {
         const domain = data.domains.find(domain => domain.id === mailbox.domain_id);
         if (!domain) return null;
         return <article className="mailbox-card" key={mailbox.id}><div className="section-title"><div><strong className="mail-address">{mailbox.local_part}@{domain.domain}</strong><p className="small muted">{mailbox.display_name} · quota {space(mailbox.quota_mb)}</p>
-            {mailbox.usage_synced_at ? <><Meter value={mailbox.used_mb ?? 0} max={mailbox.quota_mb} label="Stockage utilisé"/><p className="small muted">{megabytes(mailbox.used_mb ?? 0)} utilisés · {mailbox.messages ?? 0} messages · dernière activité {ago(mailbox.last_activity_at)}</p></> : null}</div><span className="badge">{statusLabels[mailbox.status]}</span></div>
+            {mailbox.usage_synced_at ? <><Meter value={mailbox.used_mb ?? 0} max={mailbox.quota_mb} label="Stockage utilisé"/><p className="small muted">{megabytes(mailbox.used_mb ?? 0)} utilisés · {mailbox.messages ?? 0} messages · dernier message {ago(mailbox.last_activity_at)} {mailbox.login_checked_at ? ' · dernière connexion ' + (mailbox.last_login_at ? ago(mailbox.last_login_at) : ': aucune depuis 45 jours') : ''}</p></> : null}</div><span className="badge">{statusLabels[mailbox.status]}</span></div>
           {canManage ? <MailboxActions domain={domain} mailbox={mailbox} admin={admin} automatic={data.automatic_available} onAction={action}/> : <OutlookSettings domain={domain} mailbox={mailbox}/>}
         </article>;
       })}

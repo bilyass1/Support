@@ -21,7 +21,7 @@ beforeAll(async()=>{
  const db={connect:async()=>({query,release:()=>{}}),end:async()=>{}};
  const options={database:db as never,baseURL:'https://support.test',secret:'test-secret-at-least-thirty-two-characters',emailAndPassword:{enabled:true,minPasswordLength:12},rateLimit:{enabled:false},plugins:[twoFactor({issuer:'Solumove Support'}),passkey({rpID:'support.test',rpName:'Solumove Support',origin:'https://support.test'})]};
  await (await getMigrations(options)).runMigrations();
- for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+ for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql','011_mail_logins.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
  harness.auth=betterAuth(options);
 });
 afterAll(async()=>{vi.unstubAllEnvs();await harness.db.close();});

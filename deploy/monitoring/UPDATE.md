@@ -1,4 +1,4 @@
-# Mise à jour « Surveillance, rappels et chiffres »
+# Mise à jour « Surveillance, rappels, chiffres et connexions mail »
 
 ## Ce que la mise à jour ajoute
 
@@ -6,11 +6,13 @@
 - **Rappels automatiques.** Formule (30 et 7 jours avant l’échéance), nom de domaine (30 et 7 jours), certificat SSL (14 et 3 jours), facture échue. Chaque rappel part une seule fois.
 - **Chiffres.** Onglet admin : encaissements par mois, montant à encaisser, demandes créées et clôturées, tokens consommés, délai moyen de première réponse, satisfaction.
 
+- **Dernière connexion aux boîtes mail.** Le broker lit dans le journal Dovecot la dernière connexion IMAP ou POP3 de chaque boîte gérée (45 jours). Affichée par boîte et dans la fiche client ; alerte « aucune connexion depuis 30 jours ». Si le journal ne peut pas être lu, la valeur reste « non mesurée » au lieu d’annoncer une boîte inutilisée.
+
 Seules des adresses publiques en http(s) sont acceptées ; une adresse IP, un nom interne ou un nom qui se résout vers un réseau privé est refusé au moment du contrôle. Un site qui répond avec un code inférieur à 500 est considéré en ligne : la surveillance mesure que le serveur répond, pas que la page est correcte. La date d’expiration d’un domaine n’est pas lue automatiquement.
 
 ## Migration
 
-`010_monitoring.sql` crée trois tables. Aucune donnée existante n’est modifiée.
+`010_monitoring.sql` crée trois tables et `011_mail_logins.sql` ajoute deux colonnes. Aucune donnée existante n’est modifiée.
 
 ## Procédure sur le VPS
 
@@ -42,8 +44,17 @@ systemctl enable --now supportflow-monitor.timer
 systemctl start supportflow-monitor.service; journalctl -u supportflow-monitor.service -n 3 --no-pager
 ```
 
+Broker (connexions mail), après la bascule :
+
+```bash
+cd "$NEW/deploy/local-mail" && python3 test_broker.py 2>&1 | tail -3
+cp -p /usr/local/libexec/supportflow-mail/broker.py "$BACKUP/broker.py"
+install -o root -g root -m 700 "$NEW/deploy/local-mail/broker.py" /usr/local/libexec/supportflow-mail/broker.py
+systemctl restart supportflow-mail.service && systemctl is-active supportflow-mail.service
+```
+
 Retour arrière : recopier `$BACKUP/supportflow.service`, `systemctl daemon-reload && systemctl restart supportflow.service`, puis `systemctl disable --now supportflow-monitor.timer`.
 
 ## Non vérifié avant livraison
 
-Le contrôle réel d’un site depuis le VPS (réseau sortant, pare-feu, SELinux) et la lecture d’un vrai certificat : la logique a été testée avec des réponses simulées et le script a tourné sur PostgreSQL 16 hors du VPS.
+Le contrôle réel d’un site depuis le VPS (réseau sortant, pare-feu, SELinux) et la lecture d’un vrai certificat : la logique a été testée avec des réponses simulées et le script a tourné sur PostgreSQL 16 hors du VPS. La lecture du journal Dovecot par le broker est testée avec des sorties simulées, pas sur le vrai journal.

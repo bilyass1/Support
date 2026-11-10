@@ -162,6 +162,27 @@ class BrokerTests(unittest.TestCase):
             with patch.object(broker,'HOME_ROOT',home),patch.object(Path,'lstat',lstat):
                 with self.assertRaises(broker.Rejected):broker.reviewed_layout(account,'contact-imf-immobiliere.tn',home/'unsafe','contact-imf-immobiliere.tn@localhost')
 
+class LoginTests(unittest.TestCase):
+    def test_reads_the_last_sign_in_from_journal_output(self):
+        self.assertEqual(broker.parse_login('1762780575.123456 mail dovecot[1]: imap-login: Login: user=<contact-cimeevents.com>, method=PLAIN'), 1762780575)
+        self.assertEqual(broker.parse_login('-- No entries --'), 0)
+        self.assertEqual(broker.parse_login(''), 0)
+
+    def test_lookup_escapes_the_account_name_and_never_raises(self):
+        with patch.object(broker.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='1762780575.5 x')) as run:
+            self.assertEqual(broker.last_login('contact-cimeevents.com'), 1762780575)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[0], 'journalctl')
+            self.assertIn('user=<contact\\-cimeevents\\.com>,', argv[-1])
+        with patch.object(broker.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='')):
+            self.assertEqual(broker.last_login('contact-cimeevents.com'), 0)       # nothing matched: no sign-in
+        with patch.object(broker.subprocess, 'run', side_effect=OSError('missing')):
+            self.assertIsNone(broker.last_login('contact-cimeevents.com'))         # unreadable journal: unknown
+        with patch.object(broker.subprocess, 'run', side_effect=broker.subprocess.TimeoutExpired('journalctl', 6)):
+            self.assertIsNone(broker.last_login('contact-cimeevents.com'))
+        with patch.object(broker.subprocess, 'run', return_value=SimpleNamespace(returncode=2, stdout='')):
+            self.assertIsNone(broker.last_login('contact-cimeevents.com'))
+
 class UsageTests(unittest.TestCase):
     def setUp(self):
         self.mailbox_id = str(uuid.uuid4())
@@ -186,16 +207,23 @@ class UsageTests(unittest.TestCase):
             patcher = patch.object(broker, target, return_value=value); patcher.start(); self.addCleanup(patcher.stop)
         for patcher in (patch.object(broker, 'STATE', self.state), patch.object(broker, 'HOME_ROOT', self.homes),
                         patch.object(broker, 'secure_file'), patch.object(broker.pwd, 'getpwnam', return_value=account),
-                        patch.object(broker, 'command')):
+                        patch.object(broker, 'last_login', return_value=1762780575), patch.object(broker, 'command')):
             mock = patcher.start(); self.addCleanup(patcher.stop)
             if patcher.attribute == 'command':
                 self.command = mock
+
+    def test_an_unreadable_journal_never_fails_the_measurement_nor_claims_no_sign_in(self):
+        with patch.object(broker, 'last_login', return_value=None):
+            result = broker.provision(self.body)
+        self.assertEqual(result['used_bytes'], 1790)
+        self.assertNotIn('last_login', result)
 
     def test_measures_messages_and_storage_without_running_any_command(self):
         result = broker.provision(self.body)
         self.assertEqual(result['used_bytes'], 1790)
         self.assertEqual(result['messages'], 3)
         self.assertGreater(result['last_activity'], 0)
+        self.assertEqual(result['last_login'], 1762780575)
         self.command.assert_not_called()
 
     def test_never_follows_links_out_of_the_mailbox(self):

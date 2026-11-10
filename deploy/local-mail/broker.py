@@ -149,6 +149,35 @@ def add_alias(address, username, mailbox_id):
 
 MAX_USAGE_ENTRIES = 500000
 
+def parse_login(output):
+    # journalctl -o short-unix starts each line with the event time in seconds.
+    for line in output.splitlines():
+        head = line.split(' ', 1)[0]
+        try:
+            moment = float(head)
+        except ValueError:
+            continue
+        if moment > 0:
+            return int(moment)
+    return 0
+
+def last_login(username):
+    # Read-only: the most recent IMAP or POP3 sign-in Dovecot logged for this account in the last 45 days.
+    # The username comes from the root-written state record and is escaped before it reaches the pattern.
+    # Returns 0 when there was none, and None when the journal could not be read in time: "unknown" must
+    # never be reported as "never signed in", and must never fail the storage measurement.
+    pattern = r'(imap|pop3)-login: Login: user=<' + re.escape(username) + '>,'
+    try:
+        done = subprocess.run(['journalctl', '-u', 'dovecot', '--since', '-45days', '--no-pager', '-o', 'short-unix',
+                               '--reverse', '--lines', '1', '--grep', pattern], text=True, capture_output=True, timeout=6,
+                              env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'})
+    except (subprocess.SubprocessError, OSError):
+        return None
+    # journalctl exits 1 when nothing matched.
+    if done.returncode not in (0, 1):
+        return None
+    return parse_login(done.stdout)
+
 def usage(body):
     # Read-only. Only a mailbox with an active root-written state record is measured, and only inside
     # the home that record names. Nothing is followed outside it: symlinks are counted as nothing.
@@ -186,7 +215,11 @@ def usage(body):
                     if in_messages:
                         messages += 1
                         latest = max(latest, item.st_mtime)
-    return {'used_bytes': used, 'messages': messages, 'last_activity': int(latest)}
+    result = {'used_bytes': used, 'messages': messages, 'last_activity': int(latest)}
+    login = last_login(username)
+    if login is not None:
+        result['last_login'] = login
+    return result
 
 def provision(body):
     operation = body.get('operation')

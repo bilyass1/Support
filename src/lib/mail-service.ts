@@ -48,8 +48,8 @@ export async function syncMailUsage(actor: Actor) {
   for (const row of rows) {
     const usage = await localMailboxUsage(row as MailDomain, row as Mailbox);
     if (!usage) continue;
-    await pool.query('UPDATE email_mailboxes SET used_mb=$2,messages=$3,last_activity_at=$4,usage_synced_at=now() WHERE id=$1',
-      [row.id, usage.used_mb, usage.messages, usage.last_activity_at]);
+    await pool.query('UPDATE email_mailboxes SET used_mb=$2,messages=$3,last_activity_at=$4,last_login_at=coalesce($5,last_login_at),login_checked_at=CASE WHEN $6 THEN now() ELSE login_checked_at END,usage_synced_at=now() WHERE id=$1',
+      [row.id, usage.used_mb, usage.messages, usage.last_activity_at, usage.last_login_at, usage.login_tracked]);
     measured++;
   }
   return {measured, total: rows.length, message: !rows.length ? 'Aucune boîte Postfix active à relever.' : measured

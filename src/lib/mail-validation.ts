@@ -40,7 +40,7 @@ export type Mailbox = {
   operation: 'create' | 'suspend' | 'resume' | 'reset_password' | null;
   operation_state: 'pending' | 'processing' | 'failed' | null;
   operation_started_at: string | null;
-  used_mb?: number | null; messages?: number | null; last_activity_at?: string | null; usage_synced_at?: string | null;
+  used_mb?: number | null; messages?: number | null; last_activity_at?: string | null; last_login_at?: string | null; login_checked_at?: string | null; usage_synced_at?: string | null;
 };
 export type MailWorkspace = {domains: MailDomain[]; mailboxes: Mailbox[]; automatic_available: boolean; page: number; total_mailboxes: number};
 

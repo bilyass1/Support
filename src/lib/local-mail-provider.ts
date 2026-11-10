@@ -49,9 +49,12 @@ export async function provisionLocalMailbox(domain: MailDomain, mailbox: Mailbox
 export async function localMailboxUsage(domain: MailDomain, mailbox: Mailbox) {
   try {
     const answer = await localMailCall({operation: 'usage', domain: domain.domain, local_part: mailbox.local_part, mailbox_id: mailbox.id});
-    const bytes = Number(answer.used_bytes), messages = Number(answer.messages), last = Number(answer.last_activity);
+    const bytes = Number(answer.used_bytes), messages = Number(answer.messages), last = Number(answer.last_activity), login = Number(answer.last_login);
     if (!Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(messages) || messages < 0) return null;
     return {used_mb: Math.min(2_000_000_000, Math.ceil(bytes / 1_048_576)), messages: Math.min(2_000_000_000, messages),
-      last_activity_at: Number.isFinite(last) && last > 0 ? new Date(last * 1000).toISOString() : null};
+      last_activity_at: Number.isFinite(last) && last > 0 ? new Date(last * 1000).toISOString() : null,
+      // Absent when the broker predates sign-in tracking, or when Dovecot logged no sign-in in the last 45 days.
+      last_login_at: Number.isFinite(login) && login > 0 ? new Date(login * 1000).toISOString() : null,
+      login_tracked: Object.hasOwn(answer, 'last_login')};
   } catch { return null; }
 }

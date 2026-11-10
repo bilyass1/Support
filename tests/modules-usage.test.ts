@@ -18,7 +18,7 @@ describe('modules, usage tracking and client insights',()=>{
   harness.db=new PGlite();
   await harness.db.exec(`CREATE TABLE "user"(id text PRIMARY KEY,name text,email text,"twoFactorEnabled" boolean);CREATE TABLE "passkey"(id text,"userId" text);
    CREATE TABLE "session"(id text,"userId" text,"updatedAt" timestamptz);CREATE TABLE "account"(id text,"providerId" text,"userId" text,password text);`);
-  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
+  for(const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql','011_mail_logins.sql'])await harness.db.exec(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));
   org=(await q<{id:string}>("INSERT INTO organizations(name) VALUES('Modules One') RETURNING id"))[0].id;
   other=(await q<{id:string}>("INSERT INTO organizations(name) VALUES('Modules Two') RETURNING id"))[0].id;
   await q('INSERT INTO wallets(organization_id,balance) VALUES($1,50),($2,0)',[org,other]);
@@ -77,6 +77,10 @@ describe('modules, usage tracking and client insights',()=>{
   const messages=computeAlerts([base]).map(a=>a.message).join(' | ');
   for(const expected of ['renouveler dans 10','Il reste 5','2 facture(s) en retard','90 %','depuis 7 jours'])expect(messages).toContain(expected);
   expect(computeAlerts([base])[0].level).toBe('danger');
+  // Unused mailboxes are reported only once the broker can read sign-ins; before that, silence is not evidence.
+  expect(messages).not.toContain('boîtes mail depuis 30 jours');
+  expect(computeAlerts([{...base,mail_login_checked:3,mail_last_login:null}]).map(a=>a.message).join()).toContain('Aucune connexion à ses boîtes mail depuis 30 jours');
+  expect(computeAlerts([{...base,mail_login_checked:3,mail_last_login:new Date().toISOString()}]).map(a=>a.message).join()).not.toContain('boîtes mail depuis 30 jours');
   expect(computeAlerts([{...base,available:80,invoices_overdue:0,mail_nearly_full:0,ends_at:new Date(Date.now()+200*86_400_000).toISOString(),app_last_seen:new Date().toISOString()}])).toEqual([]);
  });
  it('accepts a device sign-in only when the device verified its owner',()=>{

@@ -7,7 +7,7 @@ export type ClientInsight={
  users:{id:string;name:string;email:string;two_factor:boolean;needs_password:boolean;devices:number;push_devices:number;last_active:string|null}[];
  tickets_open:number;tickets_total:number;tickets_late?:number;cases_open:number;purchases_pending:number;
  invoices_due:{currency:string;amount_minor:number}[];invoices_overdue:number;
- mailboxes:number;mail_quota_mb:number;mail_used_mb:number;mail_messages:number;mail_measured:number;mail_nearly_full:number;mail_last_activity:string|null;mail_synced_at:string|null;
+ mailboxes:number;mail_quota_mb:number;mail_used_mb:number;mail_messages:number;mail_measured:number;mail_nearly_full:number;mail_last_activity:string|null;mail_last_login?:string|null;mail_login_checked?:number;mail_synced_at:string|null;
  applications:number;applications_tracked:number;sessions_30d:number;app_last_seen:string|null;
  last_active:string|null;
 };
@@ -34,7 +34,7 @@ export async function clientInsights(actor:Actor):Promise<{clients:ClientInsight
   rows(`SELECT organization_id,count(*)::int AS pending FROM purchase_requests WHERE status='pending' GROUP BY 1`),
   rows(`SELECT organization_id,currency,sum(amount_minor)::bigint AS amount_minor,count(*) FILTER(WHERE due_at<current_date)::int AS overdue FROM invoices WHERE status='issued' GROUP BY 1,2`),
   rows(`SELECT d.organization_id,count(b.id)::int AS mailboxes,coalesce(sum(b.quota_mb),0)::bigint AS quota_mb,coalesce(sum(b.used_mb),0)::bigint AS used_mb,coalesce(sum(b.messages),0)::bigint AS messages,
-   count(b.usage_synced_at)::int AS measured,count(b.id) FILTER(WHERE b.used_mb*10>=b.quota_mb*9)::int AS nearly_full,max(b.last_activity_at) AS last_activity,max(b.usage_synced_at) AS synced_at
+   count(b.usage_synced_at)::int AS measured,count(b.id) FILTER(WHERE b.used_mb*10>=b.quota_mb*9)::int AS nearly_full,max(b.last_activity_at) AS last_activity,max(b.last_login_at) AS last_login,count(b.login_checked_at)::int AS login_checked,max(b.usage_synced_at) AS synced_at
    FROM email_domains d JOIN email_mailboxes b ON b.domain_id=d.id AND b.status<>'cancelled' GROUP BY 1`),
   rows(`SELECT a.organization_id,count(*)::int AS applications,count(a.ingest_key_hash)::int AS tracked,max(a.last_seen_at) AS last_seen,
    coalesce((SELECT sum(d.sessions) FROM app_usage_daily d JOIN applications x ON x.id=d.application_id WHERE x.organization_id=a.organization_id AND d.day>current_date-30),0)::bigint AS sessions
@@ -48,7 +48,7 @@ export async function clientInsights(actor:Actor):Promise<{clients:ClientInsight
   return {organization_id:String(o.id),name:String(o.name),plan:o.plan as string|null,ends_at:iso(o.ends_at),available:int(o.balance)-int(o.reserved),reserved:int(o.reserved),annual_tokens:o.annual_tokens===null?null:int(o.annual_tokens),modules:(o.modules as string[])??[],
    users:members,tickets_open:int(t?.open),tickets_total:int(t?.total),tickets_late:int(t?.late),cases_open:int(by(cases,o.id)?.open),purchases_pending:int(by(purchases,o.id)?.pending),
    invoices_due:due.map(i=>({currency:String(i.currency),amount_minor:int(i.amount_minor)})),invoices_overdue:due.reduce((sum,i)=>sum+int(i.overdue),0),
-   mailboxes:int(m?.mailboxes),mail_quota_mb:int(m?.quota_mb),mail_used_mb:int(m?.used_mb),mail_messages:int(m?.messages),mail_measured:int(m?.measured),mail_nearly_full:int(m?.nearly_full),mail_last_activity:iso(m?.last_activity),mail_synced_at:iso(m?.synced_at),
+   mailboxes:int(m?.mailboxes),mail_quota_mb:int(m?.quota_mb),mail_used_mb:int(m?.used_mb),mail_messages:int(m?.messages),mail_measured:int(m?.measured),mail_nearly_full:int(m?.nearly_full),mail_last_activity:iso(m?.last_activity),mail_last_login:iso(m?.last_login),mail_login_checked:int(m?.login_checked),mail_synced_at:iso(m?.synced_at),
    applications:int(a?.applications),applications_tracked:int(a?.tracked),sessions_30d:int(a?.sessions),app_last_seen:iso(a?.last_seen),
    last_active:members.map(u=>u.last_active).filter(Boolean).sort().pop()??null} satisfies ClientInsight;
  });
@@ -68,6 +68,7 @@ export function alerts(clients:ClientInsight[],now=Date.now()):Alert[] {
   if(c.invoices_overdue)add('danger',`${c.invoices_overdue} facture(s) en retard de paiement.`,'billing');
   if(c.purchases_pending)add('warning',`${c.purchases_pending} demande(s) de recharge à valider.`,'tokens');
   if(c.cases_open)add('warning',`${c.cases_open} ticket(s) de support ouvert(s).`,'support');
+  if(c.mail_login_checked&&(!c.mail_last_login||now-new Date(c.mail_last_login).getTime()>30*day))add('warning','Aucune connexion à ses boîtes mail depuis 30 jours.','mail');
   if(c.mail_nearly_full)add('warning',`${c.mail_nearly_full} boîte(s) mail à plus de 90 % de leur quota.`,'mail');
   if(c.applications_tracked&&(!c.app_last_seen||now-new Date(c.app_last_seen).getTime()>7*day))add('warning','Aucune activité reçue de ses applications depuis 7 jours.','usage');
   const pending=c.users.some(u=>u.needs_password||!u.two_factor);
