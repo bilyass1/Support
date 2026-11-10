@@ -13,9 +13,14 @@ Cette mise à jour part de `fix/client-notifications` et conserve toutes ses fon
 - **Utilisation des applications.** Chaque application reçoit une clé (onglet « Applications & utilisation ») et envoie ses événements à `POST /api/ingest`.
 - **Utilisation réelle des mails.** Bouton « Relever l’utilisation réelle » dans Messagerie. Nécessite la mise à jour du broker (étape 6) ; sans elle, seuls les quotas réservés sont affichés.
 
+- **Nouveau design.** Barre latérale sombre, cartes et indicateurs, mode sombre, barre d’onglets en bas sur téléphone, couleurs du logo Solumove.
+- **Demandes.** Priorité choisie par le client, délai de première réponse suivi pour l’équipe (4 h urgente, 8 h haute, 24 h normale, 72 h basse) avec alerte dans « À traiter », notes internes invisibles du client, pièces jointes (5 Mo, 10 par demande), note de satisfaction après clôture, compteurs par statut, filtres par statut et par client, export CSV.
+- **Clients.** Renouvellement d’une formule pour un an en un clic, annonces aux clients (tous ou un seul) affichées sur leur accueil et notifiées.
+- **Divers.** Sessions actives et déconnexion d’un appareil à distance, pastille de notifications non lues pour les clients, export CSV des crédits et des factures, statut « En retard » sur les factures échues, prix des formules saisi en dinars et non plus en millimes.
+
 ## Migration
 
-`008_modules_usage.sql` et les tables passkey de Better Auth. Elles ajoutent des colonnes et des tables ; aucune donnée existante n’est modifiée ni supprimée. Tous les modules sont actifs par défaut pour les clients existants.
+`008_modules_usage.sql`, `009_ticket_followup.sql` et les tables passkey de Better Auth. Elles ajoutent des colonnes et des tables ; aucune donnée existante n’est modifiée ni supprimée. Tous les modules sont actifs par défaut pour les clients existants.
 
 ## Procédure sur le VPS
 

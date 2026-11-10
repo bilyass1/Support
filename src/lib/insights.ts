@@ -5,7 +5,7 @@ import type { Actor } from './service';
 export type ClientInsight={
  organization_id:string;name:string;plan:string|null;ends_at:string|null;available:number;reserved:number;annual_tokens:number|null;modules:string[];
  users:{id:string;name:string;email:string;two_factor:boolean;needs_password:boolean;devices:number;push_devices:number;last_active:string|null}[];
- tickets_open:number;tickets_total:number;cases_open:number;purchases_pending:number;
+ tickets_open:number;tickets_total:number;tickets_late?:number;cases_open:number;purchases_pending:number;
  invoices_due:{currency:string;amount_minor:number}[];invoices_overdue:number;
  mailboxes:number;mail_quota_mb:number;mail_used_mb:number;mail_messages:number;mail_measured:number;mail_nearly_full:number;mail_last_activity:string|null;mail_synced_at:string|null;
  applications:number;applications_tracked:number;sessions_30d:number;app_last_seen:string|null;
@@ -28,7 +28,8 @@ export async function clientInsights(actor:Actor):Promise<{clients:ClientInsight
    (SELECT max(se."updatedAt") FROM "session" se WHERE se."userId"=u.id) AS last_active
    FROM memberships m JOIN "user" u ON u.id=m.user_id LEFT JOIN client_onboarding co ON co.user_id=u.id
    WHERE NOT EXISTS(SELECT 1 FROM app_roles a WHERE a.user_id=u.id) ORDER BY u.name`),
-  rows(`SELECT organization_id,count(*)::int AS total,count(*) FILTER(WHERE status NOT IN('closed','cancelled'))::int AS open FROM tickets GROUP BY 1`),
+  rows(`SELECT organization_id,count(*)::int AS total,count(*) FILTER(WHERE status NOT IN('closed','cancelled'))::int AS open,
+   count(*) FILTER(WHERE first_response_at IS NULL AND status NOT IN('closed','cancelled') AND created_at<now()-(CASE priority WHEN 'urgent' THEN 4 WHEN 'high' THEN 8 WHEN 'normal' THEN 24 ELSE 72 END)*interval '1 hour')::int AS late FROM tickets GROUP BY 1`),
   rows(`SELECT organization_id,count(*)::int AS open FROM support_cases WHERE status<>'closed' GROUP BY 1`),
   rows(`SELECT organization_id,count(*)::int AS pending FROM purchase_requests WHERE status='pending' GROUP BY 1`),
   rows(`SELECT organization_id,currency,sum(amount_minor)::bigint AS amount_minor,count(*) FILTER(WHERE due_at<current_date)::int AS overdue FROM invoices WHERE status='issued' GROUP BY 1,2`),
@@ -45,7 +46,7 @@ export async function clientInsights(actor:Actor):Promise<{clients:ClientInsight
   const members=users.filter(u=>u.organization_id===o.id).map(u=>({id:String(u.id),name:String(u.name),email:String(u.email),two_factor:Boolean(u.two_factor),needs_password:Boolean(u.needs_password),devices:int(u.devices),push_devices:int(u.push_devices),last_active:iso(u.last_active)}));
   const t=by(tickets,o.id),m=by(mail,o.id),a=by(apps,o.id),due=invoices.filter(i=>i.organization_id===o.id);
   return {organization_id:String(o.id),name:String(o.name),plan:o.plan as string|null,ends_at:iso(o.ends_at),available:int(o.balance)-int(o.reserved),reserved:int(o.reserved),annual_tokens:o.annual_tokens===null?null:int(o.annual_tokens),modules:(o.modules as string[])??[],
-   users:members,tickets_open:int(t?.open),tickets_total:int(t?.total),cases_open:int(by(cases,o.id)?.open),purchases_pending:int(by(purchases,o.id)?.pending),
+   users:members,tickets_open:int(t?.open),tickets_total:int(t?.total),tickets_late:int(t?.late),cases_open:int(by(cases,o.id)?.open),purchases_pending:int(by(purchases,o.id)?.pending),
    invoices_due:due.map(i=>({currency:String(i.currency),amount_minor:int(i.amount_minor)})),invoices_overdue:due.reduce((sum,i)=>sum+int(i.overdue),0),
    mailboxes:int(m?.mailboxes),mail_quota_mb:int(m?.quota_mb),mail_used_mb:int(m?.used_mb),mail_messages:int(m?.messages),mail_measured:int(m?.measured),mail_nearly_full:int(m?.nearly_full),mail_last_activity:iso(m?.last_activity),mail_synced_at:iso(m?.synced_at),
    applications:int(a?.applications),applications_tracked:int(a?.tracked),sessions_30d:int(a?.sessions),app_last_seen:iso(a?.last_seen),
@@ -63,6 +64,7 @@ export function alerts(clients:ClientInsight[],now=Date.now()):Alert[] {
    if(left<=0)add('danger','Formule expirée.','clients');else if(left<=30)add('warning',`Formule à renouveler dans ${Math.ceil(left)} jour(s).`,'clients');
    if(c.available<=Math.max(1,Math.ceil((c.annual_tokens??0)*0.2)))add(c.available<=0?'danger':'warning',`Il reste ${c.available} token(s) disponible(s).`,'tokens');
   }
+  if(c.tickets_late)add('danger',`${c.tickets_late} demande(s) sans première réponse, délai dépassé.`,'tickets');
   if(c.invoices_overdue)add('danger',`${c.invoices_overdue} facture(s) en retard de paiement.`,'billing');
   if(c.purchases_pending)add('warning',`${c.purchases_pending} demande(s) de recharge à valider.`,'tokens');
   if(c.cases_open)add('warning',`${c.cases_open} ticket(s) de support ouvert(s).`,'support');

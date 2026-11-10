@@ -16,6 +16,7 @@ export const platformSchema=z.discriminatedUnion('type',[
  z.object({type:z.literal('issue_invoice'),organization_id:id,description:text,amount_minor:amount,currency:z.enum(['TND','EUR','USD']),due_at:z.iso.date()}),
  z.object({type:z.literal('invoice_status'),id,status:z.enum(['paid','void']),note:text}),
  z.object({type:z.literal('read_notification'),id}),
+ z.object({type:z.literal('read_all_notifications')}),
  z.object({type:z.literal('set_modules'),organization_id:id,modules:z.array(z.enum(MODULES)).max(MODULES.length)}),
  z.object({type:z.literal('rotate_app_key'),application_id:id}),
  z.object({type:z.literal('reset_mfa'),user_id:z.string().min(1).max(200),reason:z.string().trim().min(15).max(1000),identity_verified:z.literal(true),admin_password:z.string().min(1).max(128)})
@@ -72,6 +73,11 @@ export async function platformAct(actor:Actor,input:PlatformAction){
   if(input.type==='issue_invoice'){admin(actor);const entity=await invoice(input.organization_id,input.description,input.amount_minor,input.currency,input.due_at,null,false);await audit(input.type,entity,input);return {message:'Facture émise et notification créée.'};}
   if(input.type==='invoice_status'){admin(actor);const r=await c.query('SELECT * FROM invoices WHERE id=$1 FOR UPDATE',[input.id]);if(!r.rowCount)throw new DomainError('Facture introuvable.',404);if(r.rows[0].status!=='issued')throw new DomainError('Facture déjà traitée.',409);await c.query('UPDATE invoices SET status=$2 WHERE id=$1',[input.id,input.status]);await audit(input.type,input.id,{status:input.status,note:input.note});await notify(r.rows[0].organization_id,'Facture '+r.rows[0].number+(input.status==='paid'?' : paiement reçu, merci.':' : annulée.'));return {message:'Statut enregistré, sans recharge automatique.'};}
   if(input.type==='read_notification'){const r=await c.query('SELECT organization_id FROM notifications WHERE id=$1',[input.id]);if(!r.rowCount)throw new DomainError('Notification introuvable.',404);own(actor,r.rows[0].organization_id);await c.query('UPDATE notifications SET read_at=coalesce(read_at,now()) WHERE id=$1',[input.id]);return {message:'Notification lue.'};}
+  if(input.type==='read_all_notifications'){
+   // Read state belongs to the client organization: the team reading a list must not clear it for the client.
+   if(actor.role!=='client'||!actor.organization_id)return {message:''};
+   await c.query('UPDATE notifications SET read_at=now() WHERE organization_id=$1 AND read_at IS NULL',[actor.organization_id]);return {message:''};
+  }
   if(input.type==='set_modules'){
    admin(actor);const modules=[...new Set(input.modules)];
    const r=await c.query('UPDATE organizations SET modules=$2 WHERE id=$1 RETURNING id',[input.organization_id,modules]);if(!r.rowCount)throw new DomainError('Client introuvable.',404);
