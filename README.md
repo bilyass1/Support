@@ -63,6 +63,10 @@ Les passkeys et les notifications push exigent HTTPS (ou `localhost`). `BETTER_A
 
 `npm ci && npm run db:migrate` applique `003_platform.sql` et les tables 2FA / passkeys. Les comptes existants devront activer la 2FA à leur prochaine connexion.
 
+### Déploiement sur Vercel
+
+Le script `vercel-build` applique les migrations avant chaque build de production (`VERCEL_ENV=production`). Si une migration échoue, le build échoue et le déploiement précédent reste en ligne. Les déploiements de prévisualisation ne touchent pas la base. `vercel.json` appelle `/api/cron` une fois par jour ; Vercel envoie `CRON_SECRET` automatiquement lorsqu’il est défini dans les variables d’environnement.
+
 ### Tâche planifiée
 
 Appeler `GET /api/cron` avec l’en-tête `Authorization: Bearer $CRON_SECRET` toutes les 10 à 15 minutes : relance des envois échoués, rappels d’échéance (30 et 7 jours) et de factures en retard, relevé de l’utilisation des boîtes Mailcow.
