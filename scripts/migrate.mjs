@@ -1,17 +1,18 @@
 import { Pool } from 'pg';
 import { readFile } from 'node:fs/promises';
 import { twoFactor } from 'better-auth/plugins/two-factor';
+import { passkey } from '@better-auth/passkey';
 import { getMigrations } from 'better-auth/db/migration';
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL required');
 const pool = new Pool({connectionString:process.env.DATABASE_URL});
-const authentication = await getMigrations({database:pool,emailAndPassword:{enabled:true,minPasswordLength:12},rateLimit:{enabled:true,storage:'database'},plugins:[twoFactor({issuer:'Solumove Support'})]});
+const authentication = await getMigrations({database:pool,emailAndPassword:{enabled:true,minPasswordLength:12},rateLimit:{enabled:true,storage:'database'},plugins:[twoFactor({issuer:'Solumove Support'}),passkey()]});
 await authentication.runMigrations();
 const client = await pool.connect();
 try {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(758321)');
   await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())');
-  for (const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql']) {
+  for (const name of ['001_initial.sql','002_email.sql','003_local_mail.sql','004_platform.sql','005_auth_email.sql','006_session_assurance.sql','007_client_onboarding.sql','008_modules_usage.sql','009_ticket_followup.sql','010_monitoring.sql','011_mail_logins.sql']) {
     const done = await client.query('SELECT name FROM schema_migrations WHERE name=$1',[name]);
     if (!done.rowCount) {
       await client.query(await readFile(new URL('../db/'+name,import.meta.url),'utf8'));

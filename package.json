@@ -12,16 +12,23 @@
     "admin:grant": "node --env-file=.env.local scripts/grant-admin.mjs",
     "test:e2e": "playwright test",
     "notifications:deliver": "node --env-file=.env.local scripts/deliver-notifications.mjs",
-    "notifications:check": "node --env-file=.env.local scripts/check-notifications.mjs"
+    "notifications:check": "node --env-file=.env.local scripts/check-notifications.mjs",
+    "monitor:run": "node --env-file=.env.local scripts/monitor.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
   },
   "dependencies": {
+    "@better-auth/core": "1.7.7",
+    "@better-auth/passkey": "1.7.7",
+    "@better-auth/utils": "0.4.2",
+    "@better-fetch/fetch": "1.3.2",
     "better-auth": "1.7.7",
+    "better-call": "1.4.0",
     "lucide-react": "1.56.0",
-    "next": "16.4.3",
-    "nodemailer": "^10.1.1",
+    "nanostores": "1.5.5",
+    "next": "16.4.6",
+    "nodemailer": "^10.4.0",
     "pg": "8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

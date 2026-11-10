@@ -32,3 +32,7 @@ Sur l’installation existante, le compte admin est conservé. Les nouveaux comp
 62 tests applicatifs et 10 tests broker passent. Le build, les migrations PostgreSQL 16 et le parcours navigateur MFA / clair / sombre ont également réussi dans GitHub Actions sur une base CI isolée. La disponibilité en production dépend de la migration et des contrôles décrits dans le guide VPS.
 
 Les quotas mail applicatifs mesurent le stockage alloué ; ils ne limitent pas encore physiquement le disque Dovecot. Les paiements sont confirmés manuellement. Les emails et push nécessitent leurs secrets serveur ; la PWA demande le consentement de chaque appareil.
+
+## Face ID / empreinte, modules par client, vue 360°
+
+Voir [deploy/biometrics/UPDATE.md](deploy/biometrics/UPDATE.md) : connexion par appareil enregistré après la première vérification MFA, verrouillage après inactivité, notifications obligatoires, envoi immédiat des e-mails, modules visibles par client, vue 360° de chaque client, suivi d’utilisation des applications (`POST /api/ingest`) et relevé réel des boîtes mail.

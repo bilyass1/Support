@@ -16,14 +16,14 @@ export function PlanEditor({plan,onSave,onCancel}:{plan?:Plan;onSave:(data:Recor
   function update(index:number,rule:Rule) {setRules(current=>current.map((r,i)=>i===index?rule:r));}
   return <form className="form" onSubmit={async e=>{
     e.preventDefault();const data=new FormData(e.currentTarget);setPending(true);
-    try {if(await onSave({type:'save_plan',id:plan?.id,name:data.get('name'),annual_tokens:Number(data.get('annual_tokens')),price_minor:Number(data.get('price_minor')),currency:data.get('currency'),support_level:data.get('support_level'),mail_max_mailboxes:Number(data.get('mail_max_mailboxes')),mail_total_mb:Number(data.get('mail_total_mb')),mail_per_box_mb:Number(data.get('mail_per_box_mb')),mail_create_tokens:Number(data.get('mail_create_tokens')),apply_to_existing:data.get('apply')==='on',rules}))onCancel();}
+    try {if(await onSave({type:'save_plan',id:plan?.id,name:data.get('name'),annual_tokens:Number(data.get('annual_tokens')),price_minor:Math.round(Number(data.get('price'))*(String(data.get('currency'))==='TND'?1000:100)),currency:data.get('currency'),support_level:data.get('support_level'),mail_max_mailboxes:Number(data.get('mail_max_mailboxes')),mail_total_mb:Number(data.get('mail_total_mb')),mail_per_box_mb:Number(data.get('mail_per_box_mb')),mail_create_tokens:Number(data.get('mail_create_tokens')),apply_to_existing:data.get('apply')==='on',rules}))onCancel();}
     finally{setPending(false);}
   }}>
     <h3>{plan?'Modifier la formule':'Nouvelle formule'}</h3>
     <div className="form-grid">
       <Field label="Nom"><input name="name" required minLength={2} maxLength={80} defaultValue={plan?.name}/></Field>
       <Field label="Quota annuel de crédits"><input name="annual_tokens" type="number" min={0} max={1000000} required defaultValue={plan?.annual_tokens??100}/></Field>
-      <Field label="Prix annuel en unité mineure (TND : millimes)"><input name="price_minor" type="number" min={0} max={1000000} required defaultValue={plan?.price_minor??0}/></Field>
+      <Field label="Prix annuel hors taxes"><input name="price" type="number" min={0} max={2000000} step="0.001" required defaultValue={plan?plan.price_minor/(plan.currency==='TND'?1000:100):0}/></Field>
       <Field label="Devise"><select name="currency" defaultValue={plan?.currency??'TND'}><option>TND</option><option>EUR</option><option>USD</option></select></Field>
       <Field label="Niveau de support"><input name="support_level" required defaultValue={plan?.support_level??'Standard'}/></Field>
       <Field label="Nombre maximal de boîtes du pack"><input name="mail_max_mailboxes" type="number" min={0} max={1000000} required defaultValue={plan?.mail_max_mailboxes??0}/></Field>

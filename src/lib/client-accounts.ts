@@ -45,6 +45,8 @@ export async function reissueClient(actor:Actor,input:z.infer<typeof reissueClie
   await c.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE',[input.user_id]);
   const result=await c.query('UPDATE "account" SET password=$2,"updatedAt"=now() WHERE "userId"=$1 AND "providerId"=\'credential\' RETURNING id',[input.user_id,password]);if(!result.rowCount)throw new DomainError('Compte sans mot de passe local.',409);
   await c.query('INSERT INTO client_onboarding(user_id,created_by) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET needs_password=true,completed_at=NULL,created_by=excluded.created_by,created_at=now()',[input.user_id,actor.id]);
+  // A recovered account starts again from the password: devices registered before are no longer trusted.
+  await c.query('DELETE FROM "passkey" WHERE "userId"=$1',[input.user_id]);
   await c.query('DELETE FROM "session" WHERE "userId"=$1',[input.user_id]);
   await c.query('INSERT INTO audit_events(actor_id,action,entity_id,detail) VALUES($1,\'reissue_client_access\',$2,$3)',[actor.id,input.user_id,JSON.stringify({reason:input.reason,identity_verified:true})]);
   await c.query('INSERT INTO notifications(organization_id,message) VALUES($1,\'Votre accès a été réinitialisé par l’administrateur. Choisissez un nouveau mot de passe à la connexion.\')',[member.organization_id]);
